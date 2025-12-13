@@ -430,7 +430,7 @@ This is AGPL v3. Fork it. Improve it. Share it.
 **By contributing, you agree:**
 - Your code remains open source  
 - Community benefits from improvements  
-- Ömer Efe Başol holds unlimited rights for project evolution
+- Copyright © 2025 Ömer Efe Başol. Licensed under AGPL v3.
 
 ---
 
@@ -440,10 +440,6 @@ This is AGPL v3. Fork it. Improve it. Share it.
 Free forever. Modify freely. Contribute openly.
 
 **Creator & Maintainer:** Ömer Efe Başol
-
-## Contact
-If you have any questions or suggestions, feel free to contact me at:
-oe67111@gmail.com
 
 ---
 
