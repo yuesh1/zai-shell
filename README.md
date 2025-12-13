@@ -441,6 +441,10 @@ Free forever. Modify freely. Contribute openly.
 
 **Creator & Maintainer:** Ömer Efe Başol
 
+## Contact
+If you have any questions or suggestions, feel free to contact me at:
+oe67111@gmail.com
+
 ---
 
 <p align="center">
