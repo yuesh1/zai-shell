@@ -5,7 +5,7 @@
 
 ```bash
 pip install google-generativeai colorama
-python zai_shell.py
+python zaishell.py
 ```
 
 **One Goal. Zero Config. Infinite Possibilities.**
