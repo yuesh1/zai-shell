@@ -2,6 +2,20 @@
 
 **A Python-based terminal assistant I built to learn how AI agents work**
 
+> **Stop chatting via bloated agents. Start executing with ZAI.**
+
+| Feature | ZAI Shell | ShellGPT | Open Interpreter | GitHub Copilot CLI | AutoGPT |
+|---------|-----------|----------|------------------|-------------------|---------|
+| **Self-Healing Retry** | ✅ 3-attempt auto-fix | ❌ Manual retry | ❌ Manual retry | ❌ Manual retry | ⚠️ Loop-prone |
+| **Thinking Mode** | ✅ See AI's logic | ❌ Black box | ❌ Black box | ❌ Black box | ⚠️ Self-feedback |
+| **Persistent Memory** | ✅ Cross-session | ✅ Chat sessions | ✅ Session-based | ⚠️ Context only | ✅ Long-term |
+| **Multi-Mode System** | ✅ Eco/Lightning/Normal | ❌ Single mode | ❌ Single mode | ❌ Single mode | ❌ Single mode |
+| **Force Mode** | ✅ Bypass approval | ❌ N/A | ⚠️ Unsafe auto | ⚠️ Policy-based | ⚠️ Fully autonomous |
+| **Shell Intelligence** | ✅ Auto-detect & switch | ✅ Cross-shell | ✅ Multi-language | ✅ Terminal native | ❌ Not terminal-focused |
+| **Installation** | ✅ 2 commands | ✅ `pip install` | ⚠️ Docker setup | ⚠️ Auth required | ❌ Complex platform |
+| **Cost** | ✅ Free tier friendly | ✅ API costs | ✅ API costs | ⚠️ Limited free tier | ❌ High API costs |
+| **Local Execution** | ✅ Terminal-based | ✅ Terminal-based | ✅ Full system access | ✅ Repository aware | ⚠️ Platform/Server |
+
 I'm 15 and learning to code. This project started as a way to understand how AI assistants handle commands, retry failed operations, and interact with the system. It's still rough around the edges, but the core features work pretty well.
 
 ```bash
