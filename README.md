@@ -80,7 +80,7 @@ ZAI supports three execution modes designed to balance **performance, speed, and
 
 * **Normal**: 3.01s
 * **Eco**: 3.21s
-* **Lightning**: 2.98s
+* **Lightning**: 2.78s
 
 ####  Mode Descriptions
 
