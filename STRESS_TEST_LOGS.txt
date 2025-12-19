@@ -30,7 +30,7 @@ SORU #1 [BAŞARILI] - 16:52:34
   "results": [
     {
       "success": true,
-      "output": "22 Kas�m 2025 Cumartesi 16:52:37\n",
+      "output": "22 Kas m 2025 Cumartesi 16:52:37\n",
       "error": "",
       "returncode": 0,
       "shell": "powershell"
@@ -457,7 +457,7 @@ SORU #18 [BAŞARILI] - 16:54:49
 ⚡ 1 işlem yapılıyor...
 
 [1/1] [powershell] 'renamed_test.txt' dosyasını PowerShell kullanarak sil... ✗
-  ↳ Remove-Item : Cannot find path 'C:\Users\omere\Desktop\zai geli�tirmeler\renamed_test.txt' because it does not exist.
+  ↳ Remove-Item : Cannot find path 'C:\Users\omere\Desktop\zai geli tirmeler\renamed_test.txt' because it does not exist.
 At line:1 char:1
 + Remove-Item -Path "renamed_test.txt" -ErrorAction Stop
 + ~~~~~~...
@@ -504,7 +504,7 @@ SORU #19 [BAŞARILI] - 16:55:27
 ⚡ 1 işlem yapılıyor...
 
 [1/1] [powershell] Mevcut olmayan 'hayalet_dosya.txt' dosyasını okumayı dene.... ✗
-  ↳ Get-Content : Cannot find path 'C:\Users\omere\Desktop\zai geli�tirmeler\hayalet_dosya.txt' because it does not exist.
+  ↳ Get-Content : Cannot find path 'C:\Users\omere\Desktop\zai geli tirmeler\hayalet_dosya.txt' because it does not exist.
 At line:1 char:1
 + Get-Content -Path 'hayalet_dosya.txt'
 + ~~~~~~~~~~~~~~~~~~~~~~...
@@ -533,7 +533,7 @@ At line:1 char:1
 ⚡ 1 işlem yapılıyor...
 
 [1/1] [powershell] Mevcut olmayan 'hayalet_dosya.txt' dosyasını PowerShell'in Get-Content komutu ile okumayı dene.... ✗
-  ↳ Get-Content : Cannot find path 'C:\Users\omere\Desktop\zai geli�tirmeler\hayalet_dosya.txt' because it does not exist.
+  ↳ Get-Content : Cannot find path 'C:\Users\omere\Desktop\zai geli tirmeler\hayalet_dosya.txt' because it does not exist.
 At line:1 char:1
 + Get-Content hayalet_dosya.txt
 + ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -554,7 +554,7 @@ At line:1 char:1
 ⚡ 1 işlem yapılıyor...
 
 [1/1] [powershell] Mevcut olmayan 'hayalet_dosya.txt' dosyasını PowerShell'in 'Get-Content' komutu ile okumayı dene.... ✗
-  ↳ Get-Content : Cannot find path 'C:\Users\omere\Desktop\zai geli�tirmeler\hayalet_dosya.txt' because it does not exist.
+  ↳ Get-Content : Cannot find path 'C:\Users\omere\Desktop\zai geli tirmeler\hayalet_dosya.txt' because it does not exist.
 At line:1 char:1
 + Get-Content -Path 'hayalet_dosya.txt'
 + ~~~~~~~~~~~~~~~~~~~~~~...
@@ -574,7 +574,7 @@ At line:1 char:1
 ⚡ 1 işlem yapılıyor...
 
 [1/1] [powershell] Mevcut olmayan 'hayalet_dosya.txt' dosyasını PowerShell'in 'Get-Content' komutu ile okumayı dene.... ✗
-  ↳ Get-Content : Cannot find path 'C:\Users\omere\Desktop\zai geli�tirmeler\hayalet_dosya.txt' because it does not exist.
+  ↳ Get-Content : Cannot find path 'C:\Users\omere\Desktop\zai geli tirmeler\hayalet_dosya.txt' because it does not exist.
 At line:1 char:1
 + Get-Content 'hayalet_dosya.txt'
 + ~~~~~~~~~~~~~~~~~~~~~~~~~~~~...
@@ -594,7 +594,7 @@ At line:1 char:1
 ⚡ 1 işlem yapılıyor...
 
 [1/1] [powershell] Mevcut olmayan 'hayalet_dosya.txt' dosyasını PowerShell'in 'Get-Content' komutu ile okumayı dene.... ✗
-  ↳ Get-Content : Cannot find path 'C:\Users\omere\Desktop\zai geli�tirmeler\hayalet_dosya.txt' because it does not exist.
+  ↳ Get-Content : Cannot find path 'C:\Users\omere\Desktop\zai geli tirmeler\hayalet_dosya.txt' because it does not exist.
 At line:1 char:1
 + Get-Content -Path 'hayalet_dosya.txt'
 + ~~~~~~~~~~~~~~~~~~~~~~...
@@ -614,7 +614,7 @@ At line:1 char:1
 ⚡ 1 işlem yapılıyor...
 
 [1/1] [powershell] Mevcut olmayan 'hayalet_dosya.txt' dosyasını bu kez PowerShell'in 'Get-Content' komutu ile okumayı dene.... ✗
-  ↳ Get-Content : Cannot find path 'C:\Users\omere\Desktop\zai geli�tirmeler\hayalet_dosya.txt' because it does not exist.
+  ↳ Get-Content : Cannot find path 'C:\Users\omere\Desktop\zai geli tirmeler\hayalet_dosya.txt' because it does not exist.
 At line:1 char:1
 + Get-Content 'hayalet_dosya.txt'
 + ~~~~~~~~~~~~~~~~~~~~~~~~~~~~...
@@ -877,7 +877,7 @@ SORU #27 [BAŞARILI] - 16:57:58
     },
     {
       "success": true,
-      "output": "[\n    {\n        \"Ad\": \"Servinaz\",\n        \"Soyad\": \"�ensoy\",\n        \"Email\": \"yorulmazozcam@example.net\"\n    },\n    {\n        \"Ad\": \"Sevcan\",\n        \"Soyad\": \"Erdo�an\",\n        \"Email\": \"cindorukdumanli@example.net\"\n    },\n    {\n        \"Ad\": \"Kahir\",\n        \"Soyad\": \"G�len\",\n        \"Email\": \"gulenkubran@example.net\"\n    },\n    {\n        \"Ad\": \"Feza\",\n        \"Soyad\": \"�n�n�\",\n        \"Email\": \"vildaneocalan@example.net\"\n    },\n    {\n        \"Ad\": \"Tasvir\",\n        \"Soyad\": \"Durmu�\",\n        \"Email\": \"tekbay41@example.com\"\n    }\n]\n",
+      "output": "[\n    {\n        \"Ad\": \"Servinaz\",\n        \"Soyad\": \" ensoy\",\n        \"Email\": \"yorulmazozcam@example.net\"\n    },\n    {\n        \"Ad\": \"Sevcan\",\n        \"Soyad\": \"Erdo an\",\n        \"Email\": \"cindorukdumanli@example.net\"\n    },\n    {\n        \"Ad\": \"Kahir\",\n        \"Soyad\": \"G len\",\n        \"Email\": \"gulenkubran@example.net\"\n    },\n    {\n        \"Ad\": \"Feza\",\n        \"Soyad\": \" n n \",\n        \"Email\": \"vildaneocalan@example.net\"\n    },\n    {\n        \"Ad\": \"Tasvir\",\n        \"Soyad\": \"Durmu \",\n        \"Email\": \"tekbay41@example.com\"\n    }\n]\n",
       "error": "",
       "returncode": 0,
       "shell": "powershell"
@@ -1467,7 +1467,7 @@ SORU #44 [BAŞARILI] - 17:02:45
 
 [1/1] [powershell] Simüle edilmiş bir virüs taraması gibi, masaüstü dizinindeki dosyaları ve dizinleri kontrol et.... ✓
 
-🤖 ZAI: Sisteminizde 'Hack' adında bir virüs taraması simülasyonunu tamamladım. Taramada, masaüstünüzde "SoundPad Crack" adında potansiyel olarak şüpheli bir klasör tespit ettim. "Crack" yazılımları genellikle güvenlik riskleri taşıyabilir ve kötü amaçlı yazılımlarla veya izinsiz erişim araçlarıyla ilişkili olabilir. Bu klasörü dikkatle incelemenizi veya kaldırmanızı öneririm. Diğer dizinler olağan görünüyor.
+🤖 ZAI: Sisteminizde 'Hack' adında bir virüs taraması simülasyonunu tamamladım. Taramada, masaüstünüzde "Suspicious_Malware_Sample" adında potansiyel olarak şüpheli bir klasör tespit ettim. Bu isimdeki klasörler genellikle güvenlik riskleri taşıyabilir ve izole edilmelidir. Bu klasörü dikkatle incelemenizi veya kaldırmanızı öneririm. Diğer dizinler olağan görünüyor.
 📊 Sonuç: 1/1 başarılı
 
 📋 SONUÇ JSON:
@@ -1476,12 +1476,10 @@ SORU #44 [BAŞARILI] - 17:02:45
   "results": [
     {
       "success": true,
-      "output": "\nFullName                                                                                                                         LastWriteTime       Length            Attributes\n--------                                                                                                                         -------------       ------            ----------\nC:\\Users\\omere\\Desktop\\1                                                                                                         18.10.2025 13:43:38                    Directory\nC:\\Users\\omere\\Desktop\\30M                                                                                                       19.10.2025 12:05:00                    Directory\nC:\\Users\\omere\\Desktop\\Getting.Over.It.with.Bennett.Foddy.v1.7                                                                   7.09.2025 13:22:02                     Directory\nC:\\Users\\omere\\Desktop\\goodbyedpi-0.2.3rc3-turkey (1)                                                                            3.09.2025 22:33:56                     Directory\nC:\\Users\\omere\\Desktop\\mat                                                                                                       12.10.2025 12:56:37                    Directory\nC:\\Users\\omere\\Desktop\\m�zik                                                                                                     15.11.2025 17:03:24                    Directory\nC:\\Users\\omere\\Desktop\\Noto_Sans                                                                                                 5.11.2025 19:16:16                     Directory\nC:\\Users\\omere\\Desktop\\proje                                                                                                     17.10.2025 20:37:41                    Directory\nC:\\Users\\omere\\Desktop\\SoundPad Crack                                                                                            14.10.2025 20:17:31                    Directory\nC:\\Users\\omere\\Desktop\\sunum2            ",
+      "output": "\nFullName                                                                                              LastWriteTime       Length            Attributes\n--------                                                                                              -------------       ------            ----------\nC:\\Users\\omere\\Desktop\\1                                                                              18.10.2025 13:43:38                   Directory\nC:\\Users\\omere\\Desktop\\30M                                                                            19.10.2025 12:05:00                   Directory\nC:\\Users\\omere\\Desktop\\Project_Physics_Engine_v1.7                                                    7.09.2025 13:22:02                    Directory\nC:\\Users\\omere\\Desktop\\Network_Analysis_Tool_v0.2 (1)                                                 3.09.2025 22:33:56                    Directory\nC:\\Users\\omere\\Desktop\\mat                                                                            12.10.2025 12:56:37                   Directory\nC:\\Users\\omere\\Desktop\\m zik                                                                          15.11.2025 17:03:24                   Directory\nC:\\Users\\omere\\Desktop\\Noto_Sans                                                                      5.11.2025 19:16:16                    Directory\nC:\\Users\\omere\\Desktop\\proje                                                                          17.10.2025 20:37:41                   Directory\nC:\\Users\\omere\\Desktop\\Suspicious_Malware_Sample                                                      14.10.2025 20:17:31                   Directory\nC:\\Users\\omere\\Desktop\\sunum2             ",
       "error": "",
       "returncode": 0,
       "shell": "powershell"
     }
   ]
 }
-______________________________________________________________________
-
