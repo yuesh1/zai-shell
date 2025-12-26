@@ -1,3 +1,7 @@
-psutil
-colorama
 google-generativeai
+colorama
+psutil
+chromadb
+transformers
+torch
+accelerate
