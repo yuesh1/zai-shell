@@ -445,6 +445,19 @@ exit, quit      # Exit ZAI
 
 ---
 
+## 🗺️ Roadmap (v7.x Vision)
+
+Upcoming features planned for the next major release:
+
+- [ ] **Hybrid GUI & CLI Workflow:** Integration of grid-based visual control (ZAI Auto) to handle tasks requiring mouse/keyboard interaction alongside shell commands.
+- [ ] **Visual Error Analysis:** Screenshot-based analysis of GUI states and error outputs using multimodal model input.
+- [ ] **Remote Terminal Sharing:** Collaborative terminal sessions for pair programming and remote debugging.
+- [ ] **Live Web Search:** Fallback to web search for up-to-date documentation on errors.
+
+> *Have a feature request? Open an issue to discuss!*
+
+---
+
 ## 🤝 Contributing
 
 **Ways to help:**
