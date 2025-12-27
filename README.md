@@ -448,17 +448,29 @@ exit, quit      # Exit ZAI
 - ChromaDB memory requires separate installation
 
 ---
-
 ## 🗺️ Roadmap (v7.x Vision)
 
-Upcoming features planned for the next major release:
+### ✅ Completed in v7.0 (Released: December 29, 2025)
 
-- [ ] **Hybrid GUI & CLI Workflow:** Integration of grid-based visual control (ZAI Auto) to handle tasks requiring mouse/keyboard interaction alongside shell commands.
-- [ ] **Visual Error Analysis:** Screenshot-based analysis of GUI states and error outputs using multimodal model input.
-- [ ] **Remote Terminal Sharing:** Collaborative terminal sessions for pair programming and remote debugging.
-- [ ] **Live Web Search:** Fallback to web search for up-to-date documentation on errors.
+All major features have been successfully implemented:
 
-> *Have a feature request? Open an issue to discuss!*
+- ✅ **Hybrid GUI & CLI Workflow:** Full integration of terminal commands with GUI automation (pyautogui-based). AI intelligently decides when to use terminal vs GUI actions for complex workflows.
+- ✅ **Visual Error Analysis:** Complete screenshot-based analysis using Gemini Vision. Analyzes error screens, suggests solutions, and provides context for fixing issues.
+- ✅ **Remote Terminal Sharing:** P2P collaborative terminal sessions implemented with TCP sockets + ngrok support for global access. Includes safe mode and command approval system.
+- ✅ **Live Web Search:** DuckDuckGo integration for real-time web research. AI searches and analyzes results to provide up-to-date answers.
+
+### 🔧 Current Focus (v7.x Maintenance)
+
+**Ongoing improvements and bug fixes:**
+- Performance optimizations for GUI automation
+- Enhanced error recovery mechanisms
+- Memory management improvements
+- Cross-platform compatibility testing
+- Documentation updates and examples
+
+> **Note:** v7.0 represents a complete feature set. Future updates will focus on stability, performance, and user experience improvements.
+
+> *Have a feature request? [Open an issue](https://github.com/USERNAME/zaishell/issues) to discuss!*
 
 ---
 
