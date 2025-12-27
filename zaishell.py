@@ -415,6 +415,15 @@ class OfflineModelManager:
             if formatted_prompt in response:
                 response = response.replace(formatted_prompt, "").strip()
             
+            # Extract thinking block if present
+            thinking_part = ""
+            if "<thinking>" in response and "</thinking>" in response:
+                t_start = response.find("<thinking>")
+                t_end = response.find("</thinking>") + 11
+                thinking_part = response[t_start:t_end]
+            
+            # Extract JSON part
+            json_part = response
             if "{" in response:
                 start_index = response.find("{")
                 bracket_count = 0
@@ -431,9 +440,13 @@ class OfflineModelManager:
                         break
                 
                 if end_index != -1:
-                    response = response[start_index:end_index]
+                    json_part = response[start_index:end_index]
             
-            return response
+            # Combine if we have thinking
+            if thinking_part:
+                return f"{thinking_part}\n{json_part}"
+            
+            return json_part
             
         except Exception as e:
             return f"Error generating response: {str(e)}"
@@ -719,6 +732,25 @@ REMEMBER: System has {len(self.context['available_shells'])} different shells: {
         
         if self.offline_mode:
             shells = ', '.join(self.context['available_shells'])
+            
+            if self.thinking_enabled:
+                return f"""You are a command line tool.
+First, analyze the user request inside <thinking> tags.
+Then, output valid JSON for the action.
+
+Example:
+User: list files
+Output:
+<thinking>
+User wants to see files in the current directory.
+This is a safe read-only operation.
+I will use the 'dir' command for Windows.
+</thinking>
+{{"understanding": "list files", "actions": [{{"type": "command", "description": "list files", "details": {{"shell": "cmd", "content": "dir"}}}}], "response": "Listing files."}}
+
+Current Task:
+User: {main_content}
+Output:"""
             
             return f"""You are a command line tool. Output valid JSON only.
 
@@ -1148,11 +1180,9 @@ class AITools:
             if not path:
                 return {"success": False, "error": "File path not specified"}
             
-            # --- AKILLI YOL DÜZELTME (SMART PATH FIX) ---
-            # Eğer yol "Desktop/" veya "Documents/" ile başlıyorsa gerçek yola çevir
             path_lower = path.lower()
             if path_lower.startswith("desktop/") or path_lower.startswith("desktop\\"):
-                # "Desktop/dosya.txt" -> "C:/Users/Ad/Desktop/dosya.txt"
+
                 real_desktop = os.path.join(os.path.expanduser('~'), 'Desktop')
                 clean_name = path[7:].lstrip('/\\')
                 path = os.path.join(real_desktop, clean_name)
@@ -1161,7 +1191,6 @@ class AITools:
                 real_docs = os.path.join(os.path.expanduser('~'), 'Documents')
                 clean_name = path[9:].lstrip('/\\')
                 path = os.path.join(real_docs, clean_name)
-            # -------------------------------------------
             
             path = os.path.normpath(os.path.expanduser(path))
             
@@ -1448,7 +1477,7 @@ class ZAIShell:
         
         print(f"""
 {Fore.CYAN}╔════════════════════════════════════════════════════════════╗
-║        🚀 ZAI v6.0 - Advanced AI Assistant               ║
+║        🚀 ZAI v6.0.1 - Advanced AI Assistant               ║
 ║    Memory • Modes • Thinking • Security • Offline         ║
 ╚════════════════════════════════════════════════════════════╝{Style.RESET_ALL}
 
@@ -1666,5 +1695,4 @@ def main():
 
 
 if __name__ == "__main__":
-
     main()
