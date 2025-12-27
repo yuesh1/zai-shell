@@ -133,26 +133,30 @@ Attempt 3: [CMD] Use py launcher
 ```
 
 ### 🐚 Universal Shell Support (13 Shells)
-ZAI supports the most comprehensive shell ecosystem:
 
-**Windows:**
-- CMD (Standard command prompt)
-- PowerShell (Windows management)
-- PWSH (PowerShell Core - cross-platform)
-- Git Bash (Unix commands on Windows)
-- WSL (Full Linux subsystem)
-- Cygwin (Unix tools for Windows)
+ZAI supports the most comprehensive shell ecosystem. It automatically selects the best shell for each task or uses multiple shells in a single request.
 
-**Linux/Mac:**
-- Bash (Standard Linux shell)
-- Sh (Basic shell)
-- Zsh (Modern macOS default)
-- Fish (User-friendly with auto-suggestions)
-- Ksh (Korn shell)
-- Tcsh (Tenex C shell)
-- Dash (Debian Almquist shell)
+| **Windows Ecosystem** | **Linux/Unix Ecosystem** |
+|-------------------|----------------------|
+| • **CMD** (Standard) | • **Bash** (Standard Linux) |
+| • **PowerShell** (Management) | • **Zsh** (MacOS Default) |
+| • **PWSH** (Cross-platform) | • **Fish** (User-friendly) |
+| • **WSL** (Linux Subsystem) | • **Sh** (Basic Shell) |
+| • **Git Bash** (Unix on Win) | • **Ksh, Tcsh, Dash** |
+| • **Cygwin** (Unix Tools) | |
 
-Auto-selects best shell for each task and can use different shells in the same request.
+---
+
+#### 🚀 Real-World Example: Cross-Shell Orchestration
+
+**The Task:**
+> *"Using WSL, create a file on Desktop. Use CMD to write text. Use PowerShell to compress it. Finally, delete original with WSL."*
+
+**The Result:**
+![Cross Shell Orchestration](assets/crossshell.gif)
+
+✅ **ZAI seamlessly orchestrates:** `WSL` → `CMD` → `PowerShell` → `WSL`
+⏱️ **Performance:** 4 shells, 4 actions, **6.77 seconds**, zero manual intervention.
 
 ### 🧠 Thinking Mode
 See exactly how ZAI solves problems:
