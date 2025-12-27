@@ -6,10 +6,61 @@ import datetime
 import json
 import platform
 import threading
+import socket
+import hashlib
+import base64
+import re
+import uuid
 from pathlib import Path
+from typing import Dict, List, Optional, Any
+from io import BytesIO
 
 import google.generativeai as genai
 from colorama import init, Fore, Style
+
+# Optional imports with fallback
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+
+try:
+    from bs4 import BeautifulSoup
+    BS4_AVAILABLE = True
+except ImportError:
+    BS4_AVAILABLE = False
+
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+
+try:
+    import pyautogui
+    import keyboard
+    PYAUTOGUI_AVAILABLE = True
+    pyautogui.PAUSE = 0.1
+    pyautogui.FAILSAFE = True
+except ImportError:
+    PYAUTOGUI_AVAILABLE = False
+
+try:
+    import websocket
+    WEBSOCKET_AVAILABLE = True
+except ImportError:
+    WEBSOCKET_AVAILABLE = False
+
+try:
+    from ddgs import DDGS
+    DDGS_AVAILABLE = True
+except ImportError:
+    try:
+        from duckduckgo_search import DDGS
+        DDGS_AVAILABLE = True
+    except ImportError:
+        DDGS_AVAILABLE = False
 
 init(autoreset=True)
 
@@ -46,13 +97,778 @@ SAFETY_SETTINGS = [
     },
 ]
 
-# Dangerous commands for --safe mode
 DANGEROUS_COMMANDS = [
     'rm -rf', 'sudo rm', 'del /f', 'format', 'reboot', 'shutdown',
     'init 0', 'init 6', 'poweroff', 'halt', 'dd if=', 'mkfs',
     ':(){:|:&};:', 'chmod -R 777 /', 'chown -R', '> /dev/sda',
     'mv /* ', 'rm -r /', 'sudo dd', 'fdisk', 'wipefs'
 ]
+
+TERMINAL_CAPABILITIES = {
+    "windows": {
+        "open_url": "start {browser} {url}",
+        "notepad": "start notepad",
+        "chrome": "start chrome",
+        "firefox": "start firefox",
+        "edge": "start msedge",
+        "explorer": "start explorer",
+        "vscode": "code",
+        "cmd": "start cmd",
+        "powershell": "start powershell",
+        "calculator": "calc",
+        "paint": "mspaint",
+        "task_manager": "taskmgr",
+    },
+    "linux": {
+        "open_url": "xdg-open {url}",
+        "file_manager": "nautilus",
+        "terminal": "gnome-terminal",
+    }
+}
+
+SUPPORTED_IMAGE_FORMATS = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp']
+
+P2P_RELAY_URL = "wss://free-relay.glitch.me"
+
+
+class TaskContext:
+    """Manages persistent context for multi-step hybrid tasks"""
+    
+    def __init__(self, max_history: int = 50):
+        self.current_plan = None
+        self.completed_steps = []
+        self.current_step = 0
+        self.variables = {}
+        self.action_history = []
+        self.max_history = max_history
+        self.screenshots = []
+    
+    def set_plan(self, plan: Dict):
+        """Set a new multi-step plan"""
+        self.current_plan = plan
+        self.completed_steps = []
+        self.current_step = 0
+        self.screenshots = []
+    
+    def update(self, step: Dict, result: Dict):
+        """Mark a step as completed and update context"""
+        self.completed_steps.append({
+            "step": step,
+            "result": result,
+            "timestamp": datetime.datetime.now().isoformat()
+        })
+        self.current_step += 1
+        
+        self.action_history.append({
+            "type": step.get("type", "unknown"),
+            "action": step.get("action", ""),
+            "success": result.get("success", False)
+        })
+        
+        if len(self.action_history) > self.max_history:
+            self.action_history = self.action_history[-self.max_history:]
+    
+    def get_context_for_ai(self) -> str:
+        """Get context string for AI prompt"""
+        if not self.current_plan:
+            return ""
+        
+        completed_info = []
+        for cs in self.completed_steps[-5:]:
+            step = cs["step"]
+            result = cs["result"]
+            status = "SUCCESS" if result.get("success") else "FAILED"
+            completed_info.append(f"  - Step {step.get('step', '?')}: {step.get('type', '?')} - {status}")
+        
+        context = f"""
+CURRENT TASK CONTEXT:
+Task: {self.current_plan.get('task', 'Unknown')}
+Progress: {self.current_step}/{len(self.current_plan.get('steps', []))} steps completed
+Completed Steps:
+{chr(10).join(completed_info) if completed_info else '  None yet'}
+Variables: {json.dumps(self.variables) if self.variables else 'None'}
+"""
+        return context
+    
+    def is_complete(self) -> bool:
+        """Check if current plan is completed"""
+        if not self.current_plan:
+            return True
+        return self.current_step >= len(self.current_plan.get('steps', []))
+    
+    def clear(self):
+        """Clear context after task completion"""
+        self.current_plan = None
+        self.completed_steps = []
+        self.current_step = 0
+        self.variables = {}
+        self.screenshots = []
+    
+    def add_variable(self, key: str, value: Any):
+        """Store a dynamic variable for later steps"""
+        self.variables[key] = value
+
+
+class WebResearchEngine:
+    """DuckDuckGo web research engine using official library"""
+    
+    def __init__(self):
+        self.max_results = 5
+        self.is_available_flag = DDGS_AVAILABLE or (REQUESTS_AVAILABLE and BS4_AVAILABLE)
+        self.ai_model = None
+    
+    def set_ai_model(self, model):
+        """Set AI model for query optimization"""
+        self.ai_model = model
+    
+    def is_available(self) -> bool:
+        """Check if web research is available"""
+        return self.is_available_flag
+    
+    def optimize_query(self, user_query: str) -> str:
+        """Use AI to extract optimal English search keywords"""
+        if not self.ai_model:
+            return user_query
+        
+        try:
+            prompt = f"""Convert this user query to optimal English search keywords.
+User query: "{user_query}"
+
+Rules:
+- Extract the main topic/subject
+- Convert to English
+- Use 2-5 keywords only
+- For version queries: add "latest version" or "current version"
+- No full sentences, just keywords
+
+Examples:
+- "python son sürümünü araştır" → "python latest version"
+- "nodejs nasıl kurulur" → "nodejs install tutorial"
+- "react ile proje nasıl başlatılır" → "react create project"
+
+Return ONLY the optimized search keywords, nothing else."""
+
+            response = self.ai_model.generate_content(prompt)
+            optimized = response.text.strip().strip('"').strip("'")
+            if optimized and len(optimized) < 100:
+                return optimized
+        except:
+            pass
+        
+        return user_query
+    
+    def search(self, query: str) -> List[Dict]:
+        """Perform DuckDuckGo search"""
+        
+        if DDGS_AVAILABLE:
+            try:
+                with DDGS() as ddgs:
+                    results = []
+                    for r in ddgs.text(query, max_results=self.max_results):
+                        results.append({
+                            "title": r.get("title", ""),
+                            "snippet": r.get("body", ""),
+                            "url": r.get("href", "")
+                        })
+                    return results
+            except Exception as e:
+                print(f"{Fore.YELLOW}DDGS search error: {e}{Style.RESET_ALL}")
+        
+        if REQUESTS_AVAILABLE and BS4_AVAILABLE:
+            try:
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+                search_url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(query)}"
+                
+                response = requests.get(search_url, headers=headers, timeout=10)
+                if response.status_code != 200:
+                    return []
+                
+                soup = BeautifulSoup(response.text, 'html.parser')
+                results = []
+                
+                for result in soup.select('.result')[:self.max_results]:
+                    title_elem = result.select_one('.result__title')
+                    snippet_elem = result.select_one('.result__snippet')
+                    link_elem = result.select_one('.result__url')
+                    
+                    if title_elem:
+                        results.append({
+                            "title": title_elem.get_text(strip=True),
+                            "snippet": snippet_elem.get_text(strip=True) if snippet_elem else "",
+                            "url": link_elem.get_text(strip=True) if link_elem else ""
+                        })
+                
+                return results
+                
+            except Exception as e:
+                print(f"{Fore.YELLOW}Web search error: {e}{Style.RESET_ALL}")
+        
+        return []
+    
+    def format_results_for_ai(self, results: List[Dict], query: str) -> str:
+        """Format search results for AI consumption"""
+        if not results:
+            return f"No results found for: {query}"
+        
+        formatted = f"""IMPORTANT: Use the following web search results to answer the user's question.
+User asked: "{query}"
+
+Search Results:
+"""
+        for i, r in enumerate(results, 1):
+            formatted += f"\n{i}. {r['title']}\n"
+            formatted += f"   Source: {r['url']}\n"
+            formatted += f"   Summary: {r['snippet']}\n"
+        
+        formatted += "\nBased on these search results, provide a helpful and accurate answer."
+        return formatted
+    
+    def print_results_to_user(self, results: List[Dict], query: str):
+        """Print formatted results to console for user to see"""
+        print(f"\n{Fore.CYAN}Web Search Results for '{query}':{Style.RESET_ALL}\n")
+        for i, r in enumerate(results, 1):
+            print(f"{Fore.GREEN}{i}. {r['title']}{Style.RESET_ALL}")
+            print(f"   {Fore.BLUE}{r['url']}{Style.RESET_ALL}")
+            print(f"   {r['snippet'][:150]}...\n")
+
+
+class ImageAnalyzer:
+    """Image file analyzer using Gemini Vision"""
+    
+    def __init__(self):
+        self.model = None
+        self.is_available_flag = PIL_AVAILABLE
+    
+    def _init_model(self):
+        """Lazy initialize the model"""
+        if self.model is None:
+            self.model = genai.GenerativeModel('gemini-2.5-flash')
+    
+    def is_supported_format(self, file_path: str) -> bool:
+        """Check if file format is supported"""
+        ext = Path(file_path).suffix.lower().lstrip('.')
+        return ext in SUPPORTED_IMAGE_FORMATS
+    
+    def encode_image_to_base64(self, image_path: str) -> Optional[str]:
+        """Encode image file to base64"""
+        if not self.is_available_flag:
+            return None
+        try:
+            with open(image_path, 'rb') as f:
+                return base64.b64encode(f.read()).decode('utf-8')
+        except Exception as e:
+            print(f"{Fore.RED}Image encoding error: {e}{Style.RESET_ALL}")
+            return None
+    
+    def analyze_image(self, image_path: str, context: str = None) -> Dict:
+        """Analyze image and return structured analysis"""
+        self._init_model()
+        
+        if not os.path.exists(image_path):
+            return {"success": False, "error": f"File not found: {image_path}"}
+        
+        if not self.is_supported_format(image_path):
+            return {"success": False, "error": f"Unsupported format. Supported: {SUPPORTED_IMAGE_FORMATS}"}
+        
+        try:
+            img_data = self.encode_image_to_base64(image_path)
+            if not img_data:
+                return {"success": False, "error": "Failed to encode image"}
+            
+            ext = Path(image_path).suffix.lower().lstrip('.')
+            mime_type = f"image/{ext}" if ext != 'jpg' else "image/jpeg"
+            
+            prompt = """Analyze this image in detail. 
+If it's an error screenshot, identify:
+1. Error type and message
+2. Possible causes
+3. Suggested solutions
+
+If it's a general image, describe:
+1. Main content
+2. Text visible (if any)
+3. Key elements
+
+Respond in a structured format."""
+            
+            if context:
+                prompt = f"Context: {context}\n\n{prompt}"
+            
+            response = self.model.generate_content([
+                prompt,
+                {"mime_type": mime_type, "data": img_data}
+            ])
+            
+            return {
+                "success": True,
+                "analysis": response.text,
+                "file": image_path
+            }
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def analyze_error_screenshot(self, image_path: str) -> Dict:
+        """Specialized analysis for error screenshots"""
+        return self.analyze_image(image_path, context="This is an error screenshot. Focus on identifying the error and providing solutions.")
+
+
+class GUIAutomationBridge:
+    """Bridge between ZAI Shell and GUI Automation"""
+    
+    def __init__(self, ai_brain=None):
+        self.ai_brain = ai_brain
+        self.is_available_flag = PYAUTOGUI_AVAILABLE
+        self.screen_width = 0
+        self.screen_height = 0
+        self.model = None
+        self.action_history = []
+        
+        if self.is_available_flag:
+            self.screen_width, self.screen_height = pyautogui.size()
+    
+    def _init_model(self):
+        """Initialize model with temperature 0 for deterministic GUI actions"""
+        if self.model is None:
+            self.model = genai.GenerativeModel(
+                'gemini-2.5-flash',
+                generation_config={'temperature': 0.0, 'top_k': 1}
+            )
+    
+    def is_available(self) -> bool:
+        """Check if GUI automation is available"""
+        return self.is_available_flag
+    
+    def capture_screen(self) -> Optional[str]:
+        """Capture screen and return as base64"""
+        if not self.is_available_flag:
+            return None
+        try:
+            screenshot = pyautogui.screenshot()
+            buffer = BytesIO()
+            screenshot.save(buffer, format='PNG')
+            return base64.b64encode(buffer.getvalue()).decode('utf-8')
+        except Exception as e:
+            print(f"{Fore.RED}Screenshot error: {e}{Style.RESET_ALL}")
+            return None
+    
+    def execute_action(self, action: Dict) -> Dict:
+        """Execute a GUI action"""
+        if not self.is_available_flag:
+            return {"success": False, "error": "GUI automation not available"}
+        
+        try:
+            action_type = action.get('action', '')
+            
+            if action_type == 'click':
+                x = action.get('x', self.screen_width // 2)
+                y = action.get('y', self.screen_height // 2)
+                pyautogui.click(x, y)
+                print(f"{Fore.GREEN}GUI: Click at ({x}, {y}){Style.RESET_ALL}")
+                
+            elif action_type == 'doubleclick':
+                x = action.get('x', self.screen_width // 2)
+                y = action.get('y', self.screen_height // 2)
+                pyautogui.doubleClick(x, y)
+                print(f"{Fore.GREEN}GUI: Double-click at ({x}, {y}){Style.RESET_ALL}")
+                
+            elif action_type == 'type':
+                text = action.get('text', '')
+                pyautogui.write(text, interval=0.03)
+                print(f"{Fore.GREEN}GUI: Type '{text[:30]}...'{Style.RESET_ALL}")
+                
+            elif action_type == 'press':
+                key = action.get('key', 'enter')
+                pyautogui.press(key)
+                print(f"{Fore.GREEN}GUI: Press '{key}'{Style.RESET_ALL}")
+                
+            elif action_type == 'hotkey':
+                keys = action.get('keys', '').split('+')
+                pyautogui.hotkey(*keys)
+                print(f"{Fore.GREEN}GUI: Hotkey '{'+'.join(keys)}'{Style.RESET_ALL}")
+                
+            elif action_type == 'scroll':
+                amount = action.get('amount', -3)
+                pyautogui.scroll(amount)
+                print(f"{Fore.GREEN}GUI: Scroll {amount}{Style.RESET_ALL}")
+            
+            else:
+                return {"success": False, "error": f"Unknown action: {action_type}"}
+            
+            wait_time = action.get('wait_after', 1)
+            time.sleep(wait_time)
+            
+            self.action_history.append(action)
+            return {"success": True, "action": action_type}
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def find_and_click(self, target_description: str) -> Dict:
+        """Use AI to find element on screen and click it"""
+        self._init_model()
+        
+        if not self.is_available_flag:
+            return {"success": False, "error": "GUI automation not available"}
+        
+        screen_b64 = self.capture_screen()
+        if not screen_b64:
+            return {"success": False, "error": "Failed to capture screen"}
+        
+        prompt = f"""You are looking at a screenshot. Find the element: "{target_description}"
+
+Return ONLY a JSON object with the normalized coordinates (0-1000 scale):
+{{"x": <0-1000>, "y": <0-1000>, "found": true/false, "confidence": <0-100>}}
+
+If the element is not visible, return {{"found": false}}"""
+        
+        try:
+            response = self.model.generate_content([
+                prompt,
+                {"mime_type": "image/png", "data": screen_b64}
+            ])
+            
+            result_text = response.text
+            start = result_text.find('{')
+            end = result_text.rfind('}') + 1
+            if start >= 0 and end > start:
+                result = json.loads(result_text[start:end])
+                
+                if result.get('found', False):
+                    real_x = int((result['x'] / 1000.0) * self.screen_width)
+                    real_y = int((result['y'] / 1000.0) * self.screen_height)
+                    
+                    return self.execute_action({
+                        'action': 'click',
+                        'x': real_x,
+                        'y': real_y,
+                        'wait_after': 1.5
+                    })
+                else:
+                    return {"success": False, "error": f"Element not found: {target_description}"}
+            
+            return {"success": False, "error": "Failed to parse AI response"}
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+
+class P2PTerminalSharing:
+    """Terminal sharing via TCP sockets + ngrok for global access"""
+    
+    DEFAULT_PORT = 5757
+    
+    def __init__(self):
+        self.share_code = None
+        self.is_host = False
+        self.is_connected = False
+        self.socket = None
+        self.client_socket = None
+        self.pending_commands = []
+        self.safe_mode_always = True
+        self.terminal_logs = []
+        self.receive_thread = None
+        self.running = False
+        self.host_port = self.DEFAULT_PORT
+    
+    def get_local_ip(self) -> str:
+        """Get local IP address"""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except:
+            return "127.0.0.1"
+    
+    def start_sharing_session(self, port: int = None) -> Dict:
+        """Start hosting a sharing session"""
+        if port:
+            self.host_port = port
+        
+        try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.socket.bind(('0.0.0.0', self.host_port))
+            self.socket.listen(1)
+            self.socket.settimeout(1)
+            
+            local_ip = self.get_local_ip()
+            self.share_code = f"{local_ip}:{self.host_port}"
+            self.is_host = True
+            self.is_connected = True
+            self.running = True
+            self.pending_commands = []
+            self.terminal_logs = []
+            
+            print(f"\n{Fore.GREEN}{'='*50}{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}   TERMINAL SHARING STARTED{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}{'='*50}{Style.RESET_ALL}")
+            print(f"\n{Fore.CYAN}Local: {Fore.YELLOW}{self.share_code}{Style.RESET_ALL}")
+            print(f"\n{Fore.MAGENTA}FOR GLOBAL ACCESS (different cities/countries):{Style.RESET_ALL}")
+            print(f"{Fore.WHITE}1. Install ngrok: https://ngrok.com/download{Style.RESET_ALL}")
+            print(f"{Fore.WHITE}2. Run: ngrok tcp {self.host_port}{Style.RESET_ALL}")
+            print(f"{Fore.WHITE}3. Use the ngrok URL (e.g., 0.tcp.ngrok.io:12345){Style.RESET_ALL}")
+            print(f"\n{Fore.YELLOW}Safe mode: ALWAYS ACTIVE{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}Waiting for helper...{Style.RESET_ALL}\n")
+            
+            self.receive_thread = threading.Thread(target=self._host_listen_loop, daemon=True)
+            self.receive_thread.start()
+            
+            return {"success": True, "local": self.share_code, "port": self.host_port}
+            
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def _host_listen_loop(self):
+        """Host loop: listen for connections"""
+        while self.running:
+            try:
+                if self.client_socket is None:
+                    try:
+                        client, addr = self.socket.accept()
+                        self.client_socket = client
+                        self.client_socket.settimeout(0.5)
+                        print(f"\n{Fore.GREEN}Helper connected from: {addr[0]}:{addr[1]}{Style.RESET_ALL}")
+                        print(f"{Fore.GREEN}You >>> {Style.RESET_ALL}", end="", flush=True)
+                        self._send_to_client({"type": "connected"})
+                    except socket.timeout:
+                        continue
+                else:
+                    try:
+                        data = self.client_socket.recv(4096)
+                        if data:
+                            msg = json.loads(data.decode('utf-8'))
+                            self._handle_helper_message(msg)
+                        else:
+                            print(f"\n{Fore.YELLOW}Helper disconnected{Style.RESET_ALL}")
+                            print(f"{Fore.GREEN}You >>> {Style.RESET_ALL}", end="", flush=True)
+                            self.client_socket.close()
+                            self.client_socket = None
+                    except socket.timeout:
+                        continue
+                    except:
+                        pass
+            except:
+                if self.running:
+                    time.sleep(0.1)
+    
+    def _handle_helper_message(self, msg: Dict):
+        """Host: handle message from helper"""
+        msg_type = msg.get("type", "")
+        
+        if msg_type == "command":
+            cmd_text = msg.get("command", "")
+            cmd_id = str(uuid.uuid4())[:8]
+            
+            print(f"\n{Fore.YELLOW}{'='*50}{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}INCOMING COMMAND:{Style.RESET_ALL}")
+            print(f"{Fore.WHITE}{cmd_text}{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}{'='*50}{Style.RESET_ALL}")
+            
+            self.pending_commands.append({
+                "id": cmd_id,
+                "command": cmd_text,
+                "timestamp": datetime.datetime.now().isoformat()
+            })
+            
+            print(f"{Fore.YELLOW}Type 'share approve' or 'share reject'{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}You >>> {Style.RESET_ALL}", end="", flush=True)
+            
+        elif msg_type == "log_request":
+            self._send_to_client({"type": "logs", "logs": self.terminal_logs[-20:]})
+    
+    def _send_to_client(self, msg: Dict) -> bool:
+        """Send message to helper"""
+        if self.client_socket:
+            try:
+                self.client_socket.send(json.dumps(msg).encode('utf-8'))
+                return True
+            except:
+                return False
+        return False
+    
+    def connect_to_session(self, address: str) -> Dict:
+        """Connect to a host (local IP or ngrok URL)"""
+        try:
+            if ':' in address:
+                parts = address.split(':')
+                host = parts[0]
+                port = int(parts[1])
+            else:
+                host = address
+                port = self.DEFAULT_PORT
+            
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(15)
+            
+            print(f"{Fore.CYAN}Connecting to {host}:{port}...{Style.RESET_ALL}")
+            self.socket.connect((host, port))
+            self.socket.settimeout(0.5)
+            
+            self.share_code = f"{host}:{port}"
+            self.is_host = False
+            self.is_connected = True
+            self.running = True
+            
+            print(f"\n{Fore.GREEN}{'='*50}{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}   CONNECTED TO HOST{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}{'='*50}{Style.RESET_ALL}")
+            print(f"\n{Fore.CYAN}Host: {self.share_code}{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}Use 'share send <command>' to send commands{Style.RESET_ALL}")
+            print(f"{Fore.YELLOW}Commands need host approval{Style.RESET_ALL}\n")
+            
+            self.receive_thread = threading.Thread(target=self._helper_receive_loop, daemon=True)
+            self.receive_thread.start()
+            
+            return {"success": True, "host": self.share_code}
+            
+        except socket.timeout:
+            return {"success": False, "error": "Connection timeout"}
+        except ConnectionRefusedError:
+            return {"success": False, "error": "Connection refused - check address"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def _helper_receive_loop(self):
+        """Helper: receive messages from host"""
+        while self.running:
+            try:
+                data = self.socket.recv(4096)
+                if data:
+                    msg = json.loads(data.decode('utf-8'))
+                    self._handle_host_message(msg)
+                else:
+                    print(f"\n{Fore.YELLOW}Host disconnected{Style.RESET_ALL}")
+                    self.running = False
+                    self.is_connected = False
+                    break
+            except socket.timeout:
+                continue
+            except:
+                if self.running:
+                    time.sleep(0.1)
+    
+    def _handle_host_message(self, msg: Dict):
+        """Helper: handle message from host"""
+        msg_type = msg.get("type", "")
+        
+        if msg_type == "connected":
+            print(f"{Fore.GREEN}Connection confirmed{Style.RESET_ALL}")
+        elif msg_type == "approved":
+            result = msg.get("result", "")
+            print(f"\n{Fore.GREEN}Command approved!{Style.RESET_ALL}")
+            if result:
+                print(f"{Fore.WHITE}{result[:500]}{Style.RESET_ALL}")
+            print(f"\n{Fore.GREEN}You >>> {Style.RESET_ALL}", end="", flush=True)
+        elif msg_type == "rejected":
+            print(f"\n{Fore.RED}Command rejected{Style.RESET_ALL}")
+            print(f"\n{Fore.GREEN}You >>> {Style.RESET_ALL}", end="", flush=True)
+        elif msg_type == "logs":
+            logs = msg.get("logs", [])
+            print(f"\n{Fore.CYAN}=== HOST LOGS ==={Style.RESET_ALL}")
+            for log in logs:
+                ts = log.get('timestamp', '').split('T')[1][:8] if 'T' in log.get('timestamp', '') else ''
+                print(f"  [{ts}] {log.get('log', '')[:80]}")
+            print(f"\n{Fore.GREEN}You >>> {Style.RESET_ALL}", end="", flush=True)
+        elif msg_type == "output":
+            output = msg.get("output", "")
+            print(f"\n{Fore.CYAN}[HOST]{Style.RESET_ALL} {output}")
+            print(f"\n{Fore.GREEN}You >>> {Style.RESET_ALL}", end="", flush=True)
+    
+    def send_command(self, command: str) -> Dict:
+        """Helper: send command to host"""
+        if not self.is_connected or self.is_host:
+            return {"success": False, "error": "Only helpers can send"}
+        
+        try:
+            msg = {"type": "command", "command": command}
+            self.socket.send(json.dumps(msg).encode('utf-8'))
+            print(f"{Fore.CYAN}Sent, waiting for approval...{Style.RESET_ALL}")
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+    
+    def approve_pending(self, approve: bool = True) -> Optional[str]:
+        """Host: approve/reject pending command"""
+        if not self.pending_commands:
+            return None
+        
+        cmd = self.pending_commands.pop(0)
+        cmd_text = cmd["command"]
+        
+        if approve:
+            print(f"{Fore.GREEN}Approved{Style.RESET_ALL}")
+            self._send_to_client({"type": "approved", "command": cmd_text, "result": "Executing..."})
+            return cmd_text
+        else:
+            print(f"{Fore.YELLOW}Rejected{Style.RESET_ALL}")
+            self._send_to_client({"type": "rejected", "command": cmd_text})
+            return None
+    
+    def add_terminal_log(self, log: str, show: bool = False):
+        """Add log entry"""
+        entry = {"timestamp": datetime.datetime.now().isoformat(), "log": log[:500]}
+        self.terminal_logs.append(entry)
+        if len(self.terminal_logs) > 100:
+            self.terminal_logs = self.terminal_logs[-100:]
+        if self.is_host and self.client_socket:
+            self._send_to_client({"type": "output", "output": log[:200]})
+    
+    def broadcast_output(self, output: str):
+        """Host: send output to helper"""
+        if self.is_host and self.client_socket:
+            self._send_to_client({"type": "output", "output": output})
+    
+    def request_logs(self):
+        """Helper: request logs"""
+        if not self.is_host and self.socket:
+            try:
+                self.socket.send(json.dumps({"type": "log_request"}).encode('utf-8'))
+            except:
+                pass
+    
+    def get_pending_count(self) -> int:
+        return len(self.pending_commands)
+    
+    def show_recent_logs(self, count: int = 10):
+        """Show logs"""
+        if not self.is_host:
+            self.request_logs()
+            print(f"{Fore.CYAN}Requesting logs...{Style.RESET_ALL}")
+            return
+        
+        logs = self.terminal_logs[-count:]
+        if not logs:
+            print(f"{Fore.YELLOW}No logs{Style.RESET_ALL}")
+            return
+        print(f"\n{Fore.CYAN}Logs:{Style.RESET_ALL}")
+        for log in logs:
+            ts = log['timestamp'].split('T')[1][:8]
+            print(f"  [{ts}] {log['log'][:80]}")
+    
+    def end_session(self):
+        """End session"""
+        self.running = False
+        if self.client_socket:
+            try:
+                self.client_socket.close()
+            except:
+                pass
+            self.client_socket = None
+        if self.socket:
+            try:
+                self.socket.close()
+            except:
+                pass
+            self.socket = None
+        self.share_code = None
+        self.is_connected = False
+        self.is_host = False
+        self.pending_commands = []
+        self.terminal_logs = []
+        print(f"\n{Fore.GREEN}Session ended{Style.RESET_ALL}\n")
 
 
 class ChromaMemoryManager:
@@ -185,6 +1001,24 @@ class ChromaMemoryManager:
     def get_thinking(self):
         """Get thinking mode"""
         return self.json_manager.get_thinking()
+    
+    def set_gui_enabled(self, enabled):
+        """Set GUI enabled"""
+        self.json_manager.set_gui_enabled(enabled)
+        self.memory = self.json_manager.memory
+    
+    def get_gui_enabled(self):
+        """Get GUI enabled status"""
+        return self.json_manager.get_gui_enabled()
+    
+    def set_research_enabled(self, enabled):
+        """Set research enabled"""
+        self.json_manager.set_research_enabled(enabled)
+        self.memory = self.json_manager.memory
+    
+    def get_research_enabled(self):
+        """Get research enabled status"""
+        return self.json_manager.get_research_enabled()
 
 
 class MemoryManager:
@@ -219,6 +1053,8 @@ class MemoryManager:
             "mode": "normal",
             "thinking_enabled": False,
             "offline_mode": False,
+            "gui_enabled": False,
+            "research_enabled": False,
             "stats": {
                 "total_requests": 0,
                 "successful_actions": 0,
@@ -284,6 +1120,24 @@ class MemoryManager:
     def get_offline_mode(self):
         """Get offline mode status"""
         return self.memory.get("offline_mode", False)
+    
+    def set_gui_enabled(self, enabled):
+        """Set GUI enabled"""
+        self.memory["gui_enabled"] = enabled
+        self.save_memory()
+    
+    def get_gui_enabled(self):
+        """Get GUI enabled status"""
+        return self.memory.get("gui_enabled", False)
+    
+    def set_research_enabled(self, enabled):
+        """Set research enabled"""
+        self.memory["research_enabled"] = enabled
+        self.save_memory()
+    
+    def get_research_enabled(self):
+        """Get research enabled status"""
+        return self.memory.get("research_enabled", False)
 
 
 class OfflineModelManager:
@@ -481,7 +1335,7 @@ class ModeManager:
         },
         "lightning": {
             "model": "gemini-2.5-flash-lite",
-            "temperature": 0.1,
+            "temperature": 0.0,
             "max_output_tokens": 2048,
             "top_p": 0.9,
             "top_k": 1,
@@ -523,10 +1377,12 @@ class AIBrain:
         self.thinking_enabled = self.memory.get_thinking()
         
         self.offline_mode = self.memory.get_offline_mode()
+        self.gui_enabled = self.memory.get_gui_enabled()
+        self.research_enabled = self.memory.get_research_enabled()
         self.offline_model = None
         
         if self.offline_mode:
-            print(f"\n{Fore.YELLOW}⚠️ System started in OFFLINE mode. Loading model...{Style.RESET_ALL}")
+            print(f"\n{Fore.YELLOW}System started in OFFLINE mode. Loading model...{Style.RESET_ALL}")
             self.offline_model = OfflineModelManager()
             self.offline_model.load_model()
         
@@ -536,14 +1392,309 @@ class AIBrain:
         self.max_retries = 5
         self.temp_mode = None
         
+        self._task_context = TaskContext()
+        self._web_research = None
+        self._image_analyzer = None
+        self._gui_bridge = None
+        self._p2p_sharing = None
+    
+    @property
+    def task_context(self) -> TaskContext:
+        """Get task context manager"""
+        return self._task_context
+    
+    @property
+    def web_research(self) -> Optional[WebResearchEngine]:
+        """Lazy load web research engine (disabled in offline mode)"""
+        if self.offline_mode:
+            return None
+        if self._web_research is None:
+            self._web_research = WebResearchEngine()
+            self._web_research.set_ai_model(self.model)
+        return self._web_research
+    
+    @property
+    def image_analyzer(self) -> ImageAnalyzer:
+        """Lazy load image analyzer"""
+        if self._image_analyzer is None:
+            self._image_analyzer = ImageAnalyzer()
+        return self._image_analyzer
+    
+    @property
+    def gui_bridge(self) -> Optional[GUIAutomationBridge]:
+        """Lazy load GUI automation bridge (disabled in offline mode)"""
+        if self.offline_mode:
+            return None
+        if self._gui_bridge is None:
+            self._gui_bridge = GUIAutomationBridge(self)
+        return self._gui_bridge
+    
+    @property
+    def p2p_sharing(self) -> P2PTerminalSharing:
+        """Lazy load P2P terminal sharing"""
+        if self._p2p_sharing is None:
+            self._p2p_sharing = P2PTerminalSharing()
+        return self._p2p_sharing
+    
+    def detect_intent(self, user_message: str) -> Dict:
+        """Detect user intent using 100% AI-based NLP"""
+        intents = {
+            'needs_research': False,
+            'needs_image_analysis': False,
+            'needs_gui': False,
+            'needs_hybrid': False,
+            'image_path': None,
+            'research_query': None
+        }
+        
+        for fmt in SUPPORTED_IMAGE_FORMATS:
+            pattern = rf'[\w/\\:.-]+\.{fmt}\b'
+            match = re.search(pattern, user_message, re.IGNORECASE)
+            if match:
+                intents['needs_image_analysis'] = True
+                intents['image_path'] = match.group(0)
+                break
+        
+        if self.offline_mode or not self.model:
+            return intents
+        
+        try:
+            intent_prompt = f"""You are an intent classifier. Analyze this user request and determine what capabilities are needed.
+
+User request: "{user_message}"
+
+Return ONLY valid JSON:
+{{
+    "needs_research": true/false,
+    "needs_gui": true/false,
+    "needs_terminal": true/false,
+    "needs_hybrid": true/false
+}}
+
+RULES:
+- needs_research = true if user asks about current/latest info, versions, news, "what is X", "how to"
+- needs_terminal = true if task can be done with command line (file ops, running programs, system commands)
+- needs_gui = true if task requires clicking UI elements, buttons, forms
+- needs_hybrid = true if task needs BOTH terminal AND GUI (e.g., "open chrome and click search")
+
+Examples:
+- "list files on desktop" → terminal only
+- "open chrome and go to youtube" → terminal (start chrome youtube.com)
+- "search google and click first result" → hybrid
+- "click the red button" → gui
+- "what is the latest python version" → research
+- "open notepad and type hello world" → hybrid
+- "run ipconfig" → terminal
+- "download X and install it" → hybrid (terminal download, gui install wizard)"""
+
+            response = self.model.generate_content(intent_prompt)
+            text = response.text
+            
+            start = text.find('{')
+            end = text.rfind('}') + 1
+            if start >= 0 and end > start:
+                result = json.loads(text[start:end])
+                intents['needs_research'] = result.get('needs_research', False)
+                intents['needs_gui'] = result.get('needs_gui', False)
+                intents['needs_hybrid'] = result.get('needs_hybrid', False)
+                
+                if intents['needs_hybrid']:
+                    intents['needs_gui'] = True
+                
+                if intents['needs_research']:
+                    intents['research_query'] = user_message
+        except Exception as e:
+            pass
+        
+        return intents
+    
+    def generate_hybrid_plan(self, user_request: str) -> Optional[Dict]:
+        """Generate a hybrid plan with terminal and GUI steps"""
+        if self.offline_mode:
+            return None
+        
+        plan_prompt = f"""Analyze this user request and create an execution plan.
+User request: "{user_request}"
+
+DECISION RULES:
+1. Opening programs/sites = TERMINAL (e.g., "start chrome url")
+2. Clicking buttons = GUI
+3. Typing in browser = GUI
+4. File operations = TERMINAL
+5. System commands = TERMINAL
+
+Return a JSON plan:
+{{
+    "task": "description",
+    "needs_gui": true/false,
+    "steps": [
+        {{"step": 1, "type": "terminal", "action": "command here", "description": "what it does", "wait_after": 2}},
+        {{"step": 2, "type": "gui", "action": "click", "target": "element description", "wait_after": 1.5}}
+    ]
+}}
+
+If the task can be done entirely with terminal, set needs_gui to false.
+Only include GUI steps if clicking/typing in a GUI application is truly needed."""
+
+        try:
+            response = self.model.generate_content(plan_prompt)
+            text = response.text
+            
+            start = text.find('{')
+            if start >= 0:
+                depth = 0
+                end = start
+                for i, c in enumerate(text[start:], start):
+                    if c == '{':
+                        depth += 1
+                    elif c == '}':
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
+                
+                if end > start:
+                    json_str = text[start:end]
+                    plan = json.loads(json_str)
+                    return plan
+        except json.JSONDecodeError as e:
+            print(f"{Fore.YELLOW}Plan JSON error: {e}{Style.RESET_ALL}")
+        except Exception as e:
+            print(f"{Fore.YELLOW}Plan generation error: {e}{Style.RESET_ALL}")
+        
+        return None
+    
+    def execute_hybrid_plan(self, plan: Dict, safe_mode: bool = False) -> Dict:
+        """Execute a hybrid plan step by step"""
+        if not plan or not plan.get('steps'):
+            return {"success": False, "error": "Invalid plan"}
+        
+        self._task_context.set_plan(plan)
+        results = []
+        
+        print(f"\n{Fore.CYAN}Executing hybrid plan: {plan.get('task', 'Unknown task')}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}Total steps: {len(plan['steps'])}{Style.RESET_ALL}\n")
+        
+        for step in plan['steps']:
+            step_num = step.get('step', '?')
+            step_type = step.get('type', 'unknown')
+            description = step.get('description', step.get('action', 'Action'))
+            
+            print(f"{Fore.BLUE}[Step {step_num}] [{step_type.upper()}] {description}{Style.RESET_ALL}", end=' ')
+            
+            try:
+                if step_type == 'terminal':
+                    command = step.get('action', '')
+                    if safe_mode:
+                        for dangerous in DANGEROUS_COMMANDS:
+                            if dangerous.lower() in command.lower():
+                                print(f"{Fore.RED}BLOCKED{Style.RESET_ALL}")
+                                result = {"success": False, "error": f"Blocked: {dangerous}"}
+                                results.append(result)
+                                continue
+                    
+                    result = self.tools.run_command({
+                        'content': command,
+                        'shell': 'cmd',
+                        'encoding': 'utf-8'
+                    })
+                    
+                elif step_type == 'gui':
+                    if not self.gui_bridge or not self.gui_bridge.is_available():
+                        print(f"{Fore.YELLOW}SKIPPED (GUI not available){Style.RESET_ALL}")
+                        result = {"success": False, "error": "GUI not available"}
+                    else:
+                        action = step.get('action', 'click')
+                        target = step.get('target', '')
+                        max_gui_retries = 2
+                        gui_retry = 0
+                        
+                        while gui_retry <= max_gui_retries:
+                            if action == 'click' and target:
+                                result = self.gui_bridge.find_and_click(target)
+                            elif action == 'type':
+                                result = self.gui_bridge.execute_action({
+                                    'action': 'type',
+                                    'text': step.get('text', ''),
+                                    'wait_after': step.get('wait_after', 1)
+                                })
+                            elif action == 'press':
+                                result = self.gui_bridge.execute_action({
+                                    'action': 'press',
+                                    'key': step.get('key', 'enter'),
+                                    'wait_after': step.get('wait_after', 1)
+                                })
+                            else:
+                                result = self.gui_bridge.execute_action(step)
+                            
+                            if result.get('success'):
+                                break
+                            
+                            if gui_retry < max_gui_retries:
+                                print(f"{Fore.YELLOW}Retry {gui_retry+1}/{max_gui_retries}...{Style.RESET_ALL}")
+                                time.sleep(1)
+                                gui_retry += 1
+                            else:
+                                break
+                                
+                else:
+                    result = {"success": False, "error": f"Unknown step type: {step_type}"}
+                
+                if result.get('success'):
+                    print(f"{Fore.GREEN}OK{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.RED}FAILED: {result.get('error', 'Unknown')}{Style.RESET_ALL}")
+                
+                results.append(result)
+                self._task_context.update(step, result)
+                
+                wait_time = step.get('wait_after', 1)
+                time.sleep(wait_time)
+                
+            except Exception as e:
+                print(f"{Fore.RED}ERROR: {e}{Style.RESET_ALL}")
+                result = {"success": False, "error": str(e)}
+                results.append(result)
+                self._task_context.update(step, result)
+        
+        success_count = sum(1 for r in results if r.get('success'))
+        total = len(results)
+        
+        if success_count < total and total > 0:
+            print(f"\n{Fore.YELLOW}Some steps failed. Asking AI for recovery plan...{Style.RESET_ALL}")
+            try:
+                failed_steps = [s for s, r in zip(plan['steps'], results) if not r.get('success')]
+                recovery_prompt = f"These GUI/terminal steps failed: {json.dumps(failed_steps, ensure_ascii=False)}. Suggest alternative approach in 1 sentence."
+                recovery = self.model.generate_content(recovery_prompt)
+                print(f"{Fore.CYAN}AI Suggestion: {recovery.text[:200]}{Style.RESET_ALL}")
+            except:
+                pass
+        
+        print(f"\n{Fore.CYAN}Plan completed: {success_count}/{total} steps successful{Style.RESET_ALL}")
+        
+        self._task_context.clear()
+        
+        return {
+            "success": success_count == total,
+            "results": results,
+            "success_count": success_count,
+            "total": total
+        }
+
+        
     def _create_model(self):
         """Create model based on current mode"""
         if self.offline_mode:
             return None  # Will use offline model
         mode_config = ModeManager.get_mode_config(self.current_mode)
+        
+        temperature = mode_config["temperature"]
+        if self.current_mode == "lightning":
+            temperature = 0.0
+        
         return genai.GenerativeModel(
             mode_config["model"],
-            generation_config={"temperature": mode_config["temperature"]}
+            generation_config={"temperature": temperature}
         )
     
     def switch_to_offline(self):
@@ -711,6 +1862,9 @@ REMEMBER: System has {len(self.context['available_shells'])} different shells: {
                 active_mode = self._get_active_mode()
                 mode_config = ModeManager.get_mode_config(active_mode)
                 mode_temperature = mode_config.get("temperature", 0.7)
+                
+                if mode_temperature <= 0.0:
+                    mode_temperature = 0.1
                 
                 response_text = self.offline_model.generate(
                     system_instruction,
@@ -1452,7 +2606,7 @@ class AITools:
 
 
 class ZAIShell:
-    """Main shell interface"""
+    """Main shell interface v7.0"""
     
     def __init__(self):
         self.memory = ChromaMemoryManager()
@@ -1461,7 +2615,7 @@ class ZAIShell:
         self.request_count = 0
     
     def show_banner(self):
-        """Startup banner"""
+        """Startup banner v7.0"""
         ctx = self.brain.context
         shells = ', '.join(ctx['available_shells'])
         mode = self.brain.current_mode
@@ -1475,49 +2629,132 @@ class ZAIShell:
         
         memory_type = "ChromaDB" if hasattr(self.memory, 'use_chromadb') and self.memory.use_chromadb else "JSON"
         
+        gui_status = "ON" if self.brain.gui_enabled else "OFF"
+        research_status = "ON" if self.brain.research_enabled else "OFF"
+        
+        sharing_line = ""
+        if self.brain._p2p_sharing and self.brain._p2p_sharing.is_connected:
+            code = self.brain._p2p_sharing.share_code
+            sharing_line = f"\n{Fore.MAGENTA}🔗 Terminal Sharing: ACTIVE ({code}){Style.RESET_ALL}"
+        
         print(f"""
 {Fore.CYAN}╔════════════════════════════════════════════════════════════╗
-║        🚀 ZAI v6.0.1 - Advanced AI Assistant               ║
-║    Memory • Modes • Thinking • Security • Offline         ║
+║            🚀 ZAI v7.0 - Advanced AI Shell                 ║
+║     Terminal • GUI • Research • Image • P2P Sharing        ║
 ╚════════════════════════════════════════════════════════════╝{Style.RESET_ALL}
 
-{Fore.GREEN}🤖 I'm ZAI, your COMPLETELY FREE AI assistant{Style.RESET_ALL}
-{Fore.GREEN}💡 No restrictions - I can do everything{Style.RESET_ALL}
-{Fore.GREEN}⚡ Handle multiple tasks simultaneously{Style.RESET_ALL}
-{Fore.MAGENTA}🔧 Auto-retry with DIFFERENT methods on errors{Style.RESET_ALL}
-{Fore.CYAN}🐚 Can use {len(ctx['available_shells'])} different shells: {shells}{Style.RESET_ALL}
-{Fore.BLUE}🧠 Thinking Mode: {thinking}{Style.RESET_ALL}
-{Fore.BLUE}🌐 Network Mode: {offline}{Style.RESET_ALL}
-{Fore.BLUE}💾 Memory System: {memory_type}{Style.RESET_ALL}
+{Fore.GREEN}🤖 I understand natural language in ANY language{Style.RESET_ALL}
+{Fore.GREEN}💡 No restrictions - completely free AI assistant{Style.RESET_ALL}
+{Fore.GREEN}⚡ Auto-retry with different methods on errors{Style.RESET_ALL}
+{Fore.CYAN}🐚 Shells: {shells}{Style.RESET_ALL}
+
+{Fore.BLUE}🧠 Thinking: {thinking} | 🌐 Network: {offline} | 💾 Memory: {memory_type}{Style.RESET_ALL}
+{Fore.BLUE}🖱️ GUI: {gui_status} | 🔍 Research: {research_status}{Style.RESET_ALL}{sharing_line}
 
 {Fore.YELLOW}👤 User: {user_name} (since {first_seen}){Style.RESET_ALL}
 {Fore.YELLOW}📊 Stats: {stats['total_requests']} requests | {stats['successful_actions']} success | {stats['failed_actions']} failed{Style.RESET_ALL}
 {Fore.YELLOW}🔧 Mode: {mode.upper()} - {mode_config['description']}{Style.RESET_ALL}
-{Fore.YELLOW}📊 System: {ctx['os']} | Python {ctx['python']}{Style.RESET_ALL}
-{Fore.YELLOW}📂 Directory: {ctx['cwd']}{Style.RESET_ALL}
-
-{Fore.BLUE}💬 Examples:{Style.RESET_ALL}
-  "Write calculator to desktop"
-  "Analyze system status and report"
-  "Show top 5 CPU-intensive processes"
-  "List all files on desktop"
 
 {Fore.BLUE}🔧 Commands:{Style.RESET_ALL}
-  {Fore.CYAN}Modes:{Style.RESET_ALL} normal, eco, lightning (permanent switch)
+  {Fore.CYAN}Features:{Style.RESET_ALL} gui on/off, research on/off
+  {Fore.CYAN}Modes:{Style.RESET_ALL} normal, eco, lightning
   {Fore.CYAN}Network:{Style.RESET_ALL} switch offline, switch online
-  {Fore.CYAN}Mode Override:{Style.RESET_ALL} "your command eco" (single use)
   {Fore.CYAN}Thinking:{Style.RESET_ALL} thinking on/off
-  {Fore.CYAN}Safety Flags:{Style.RESET_ALL}
-    --safe / -s  : Block dangerous commands
-    --show       : Preview actions without executing
-    --force / -f : Skip confirmation
+  {Fore.CYAN}Sharing:{Style.RESET_ALL} share, share connect IP:PORT, share end
   {Fore.CYAN}Memory:{Style.RESET_ALL} memory clear/show/search [query]
+  {Fore.CYAN}Safety:{Style.RESET_ALL} --safe, --show, --force
   {Fore.CYAN}Other:{Style.RESET_ALL} clear, exit
 
-{Fore.MAGENTA}🎯 Whatever you want, however you want - I'll handle it!{Style.RESET_ALL}
-{Fore.MAGENTA}🐚 I choose the best shell for each command!{Style.RESET_ALL}
-{Fore.WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{Style.RESET_ALL}
+{Fore.MAGENTA}🎯 Just tell me what you need - I'll figure out how!{Style.RESET_ALL}
+{Fore.WHITE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{Style.RESET_ALL}
 """)
+    
+    def handle_share_command(self, user_input: str) -> bool:
+        """Handle share command - returns True if handled"""
+        parts = user_input.split()
+        
+        if len(parts) == 1:
+            self.brain.p2p_sharing.start_sharing_session()
+            return True
+        
+        if len(parts) >= 2:
+            subcommand = parts[1].lower()
+            
+            if subcommand == 'start':
+                port = int(parts[2]) if len(parts) >= 3 else None
+                self.brain.p2p_sharing.start_sharing_session(port)
+                return True
+            
+            elif subcommand == 'connect' and len(parts) >= 3:
+                connection_string = parts[2]
+                result = self.brain.p2p_sharing.connect_to_session(connection_string)
+                if not result.get('success'):
+                    print(f"{Fore.RED}Connection failed: {result.get('error')}{Style.RESET_ALL}")
+                return True
+            
+            elif subcommand == 'send' and len(parts) >= 3:
+                if not self.brain.p2p_sharing.is_connected:
+                    print(f"{Fore.YELLOW}Not connected to any session{Style.RESET_ALL}")
+                    return True
+                if self.brain.p2p_sharing.is_host:
+                    print(f"{Fore.YELLOW}Only helpers can send commands{Style.RESET_ALL}")
+                    return True
+                command_text = ' '.join(parts[2:])
+                self.brain.p2p_sharing.send_command(command_text)
+                return True
+            
+            elif subcommand == 'end':
+                self.brain.p2p_sharing.end_session()
+                return True
+            
+            elif subcommand == 'status':
+                if self.brain.p2p_sharing.is_connected:
+                    role = "HOST" if self.brain.p2p_sharing.is_host else "HELPER"
+                    print(f"\n{Fore.CYAN}=== SHARING STATUS ==={Style.RESET_ALL}")
+                    print(f"{Fore.GREEN}Role: {role}{Style.RESET_ALL}")
+                    print(f"{Fore.CYAN}Address: {self.brain.p2p_sharing.share_code}{Style.RESET_ALL}")
+                    if self.brain.p2p_sharing.is_host:
+                        pending = self.brain.p2p_sharing.get_pending_count()
+                        connected = self.brain.p2p_sharing.client_socket is not None
+                        print(f"{Fore.CYAN}Helper Connected: {'Yes' if connected else 'No'}{Style.RESET_ALL}")
+                        print(f"{Fore.YELLOW}Pending Commands: {pending}{Style.RESET_ALL}")
+                else:
+                    print(f"\n{Fore.YELLOW}Not connected to any sharing session{Style.RESET_ALL}")
+                return True
+            
+            elif subcommand == 'logs':
+                self.brain.p2p_sharing.show_recent_logs()
+                return True
+            
+            elif subcommand == 'approve':
+                if self.brain.p2p_sharing.is_host:
+                    cmd = self.brain.p2p_sharing.approve_pending(True)
+                    if cmd:
+                        print(f"{Fore.GREEN}Executing: {cmd}{Style.RESET_ALL}")
+                        self.brain.think_and_act(cmd, force_execute=True, safe_mode=True)
+                    else:
+                        print(f"{Fore.YELLOW}No pending commands{Style.RESET_ALL}")
+                return True
+            
+            elif subcommand == 'reject':
+                if self.brain.p2p_sharing.is_host:
+                    self.brain.p2p_sharing.approve_pending(False)
+                return True
+        
+        print(f"""
+{Fore.CYAN}=== TERMINAL SHARING ==={Style.RESET_ALL}
+  share                   - Start session (port 5757)
+  share connect IP:PORT   - Connect to host
+  share send <command>    - Send command (helper)
+  share approve/reject    - Handle commands (host)
+  share status/logs/end   - Other commands
+
+{Fore.MAGENTA}FOR GLOBAL ACCESS:{Style.RESET_ALL}
+  1. Host: Run 'ngrok tcp 5757'
+  2. Share the ngrok URL (e.g., 0.tcp.ngrok.io:12345)
+  3. Helper: 'share connect 0.tcp.ngrok.io:12345'
+""")
+        return True
     
     def parse_command(self, user_input):
         """Parse command for special flags and mode overrides"""
@@ -1555,32 +2792,33 @@ class ZAIShell:
         return user_input.strip(), force, safe_mode, show_only, temp_mode
     
     def run(self):
-        """Main loop"""
+        """Main loop v7.0 with intent-based processing"""
         try:
             os.system('cls' if os.name == 'nt' else 'clear')
             self.show_banner()
             
             while True:
                 try:
-                    user_input = input(f"\n{Fore.GREEN}💬 You >>> {Style.RESET_ALL}").strip()
+                    user_input = input(f"\n{Fore.GREEN}You >>> {Style.RESET_ALL}").strip()
                     
                     if not user_input:
                         continue
                     
-                    # Handle exit commands
                     if user_input.lower() in ['exit', 'quit', 'bye']:
                         duration = datetime.datetime.now() - self.start_time
-                        print(f"\n{Fore.CYAN}👋 Goodbye! Processed {self.request_count} requests.{Style.RESET_ALL}")
-                        print(f"{Fore.BLUE}⏱️ Duration: {str(duration).split('.')[0]}{Style.RESET_ALL}")
+                        print(f"\n{Fore.CYAN}Goodbye! Processed {self.request_count} requests.{Style.RESET_ALL}")
+                        print(f"{Fore.BLUE}Duration: {str(duration).split('.')[0]}{Style.RESET_ALL}")
                         break
                     
-                    # Handle clear commands
                     if user_input.lower() in ['clear', 'cls']:
                         os.system('cls' if os.name == 'nt' else 'clear')
                         self.show_banner()
                         continue
                     
-                    # Handle offline/online switch
+                    if user_input.lower().startswith('share'):
+                        self.handle_share_command(user_input)
+                        continue
+                    
                     if user_input.lower() == 'switch offline':
                         self.brain.switch_to_offline()
                         continue
@@ -1595,6 +2833,50 @@ class ZAIShell:
                         mode_config = ModeManager.get_mode_config(user_input.lower())
                         print(f"\n{Fore.GREEN}✓ Switched to {user_input.upper()} mode{Style.RESET_ALL}")
                         print(f"{Fore.CYAN}  {mode_config['description']}{Style.RESET_ALL}")
+                        continue
+                    
+                    # Handle GUI toggle
+                    if user_input.lower().startswith('gui'):
+                        if 'on' in user_input.lower():
+                            if not PYAUTOGUI_AVAILABLE:
+                                print(f"\n{Fore.YELLOW}GUI automation requires pyautogui and keyboard packages.{Style.RESET_ALL}")
+                                choice = input(f"{Fore.CYAN}Install now? (Y/N): {Style.RESET_ALL}").upper()
+                                if choice == 'Y':
+                                    os.system('pip install pyautogui keyboard')
+                                    print(f"\n{Fore.GREEN}✓ Installed! Please restart ZAI Shell to use GUI.{Style.RESET_ALL}")
+                                continue
+                            self.brain.gui_enabled = True
+                            self.memory.set_gui_enabled(True)
+                            print(f"\n{Fore.GREEN}✓ GUI automation ENABLED{Style.RESET_ALL}")
+                        elif 'off' in user_input.lower():
+                            self.brain.gui_enabled = False
+                            self.memory.set_gui_enabled(False)
+                            print(f"\n{Fore.YELLOW}✓ GUI automation DISABLED{Style.RESET_ALL}")
+                        else:
+                            status = "ON" if self.brain.gui_enabled else "OFF"
+                            print(f"\n{Fore.CYAN}GUI automation: {status}{Style.RESET_ALL}")
+                        continue
+                    
+                    # Handle Research toggle
+                    if user_input.lower().startswith('research'):
+                        if 'on' in user_input.lower():
+                            if not DDGS_AVAILABLE and not (REQUESTS_AVAILABLE and BS4_AVAILABLE):
+                                print(f"\n{Fore.YELLOW}Web research requires ddgs package.{Style.RESET_ALL}")
+                                choice = input(f"{Fore.CYAN}Install now? (Y/N): {Style.RESET_ALL}").upper()
+                                if choice == 'Y':
+                                    os.system('pip install ddgs')
+                                    print(f"\n{Fore.GREEN}✓ Installed! Please restart ZAI Shell to use research.{Style.RESET_ALL}")
+                                continue
+                            self.brain.research_enabled = True
+                            self.memory.set_research_enabled(True)
+                            print(f"\n{Fore.GREEN}✓ Web research ENABLED{Style.RESET_ALL}")
+                        elif 'off' in user_input.lower():
+                            self.brain.research_enabled = False
+                            self.memory.set_research_enabled(False)
+                            print(f"\n{Fore.YELLOW}✓ Web research DISABLED{Style.RESET_ALL}")
+                        else:
+                            status = "ON" if self.brain.research_enabled else "OFF"
+                            print(f"\n{Fore.CYAN}Web research: {status}{Style.RESET_ALL}")
                         continue
                     
                     # Handle thinking toggle
@@ -1644,43 +2926,107 @@ class ZAIShell:
                             print(f"Failed actions: {stats['failed_actions']}")
                         continue
                     
-                    # Parse command for special flags
                     parsed_input, force, safe_mode, show_only, temp_mode = self.parse_command(user_input)
                     
-                    # Apply temporary mode if specified
                     if temp_mode:
                         self.brain.switch_mode(temp_mode, permanent=False)
                         mode_config = ModeManager.get_mode_config(temp_mode)
-                        print(f"\n{Fore.MAGENTA}⚡ Using {temp_mode.upper()} mode for this command{Style.RESET_ALL}")
+                        print(f"\n{Fore.MAGENTA}Using {temp_mode.upper()} mode for this command{Style.RESET_ALL}")
                     
-                    # Show mode indicators
                     indicators = []
                     if safe_mode:
-                        indicators.append(f"{Fore.GREEN}🛡️ SAFE MODE{Style.RESET_ALL}")
+                        indicators.append(f"{Fore.GREEN}SAFE{Style.RESET_ALL}")
                     if show_only:
-                        indicators.append(f"{Fore.CYAN}👁️ SHOW MODE (Preview Only){Style.RESET_ALL}")
+                        indicators.append(f"{Fore.CYAN}PREVIEW{Style.RESET_ALL}")
                     if force:
-                        indicators.append(f"{Fore.RED}⚡ FORCE MODE{Style.RESET_ALL}")
+                        indicators.append(f"{Fore.RED}FORCE{Style.RESET_ALL}")
+                    
+                    if self.brain.p2p_sharing.is_connected and self.brain.p2p_sharing.safe_mode_always:
+                        indicators.append(f"{Fore.MAGENTA}SHARING-SAFE{Style.RESET_ALL}")
+                        safe_mode = True
                     
                     if indicators:
-                        print(f"\n{' | '.join(indicators)}")
+                        print(f"\n[{' | '.join(indicators)}]")
                     
                     self.request_count += 1
                     start = time.time()
                     
-                    print(f"\n{Fore.YELLOW}🧠 Thinking...{Style.RESET_ALL}")
-                    self.brain.think_and_act(parsed_input, force_execute=force, safe_mode=safe_mode, show_only=show_only)
+                    intents = self.brain.detect_intent(parsed_input)
+                    
+                    if intents['needs_image_analysis'] and intents['image_path']:
+                        print(f"\n{Fore.CYAN}Analyzing image: {intents['image_path']}{Style.RESET_ALL}")
+                        analysis = self.brain.image_analyzer.analyze_image(intents['image_path'])
+                        if analysis.get('success'):
+                            print(f"\n{Fore.GREEN}Image Analysis Result:{Style.RESET_ALL}")
+                            print(analysis.get('analysis', 'No analysis available'))
+                            enhanced_input = f"{parsed_input}\n\nImage Analysis Context:\n{analysis.get('analysis', '')}"
+                            self.brain.think_and_act(enhanced_input, force_execute=force, safe_mode=safe_mode, show_only=show_only)
+                        else:
+                            print(f"\n{Fore.RED}Image analysis failed: {analysis.get('error')}{Style.RESET_ALL}")
+                            self.brain.think_and_act(parsed_input, force_execute=force, safe_mode=safe_mode, show_only=show_only)
+                    
+                    elif intents['needs_research'] and not self.brain.offline_mode:
+                        if not self.brain.research_enabled:
+                            print(f"\n{Fore.YELLOW}Web research is disabled. Enable with 'research on'{Style.RESET_ALL}")
+                            self.brain.think_and_act(parsed_input, force_execute=force, safe_mode=safe_mode, show_only=show_only)
+                        elif self.brain.web_research and self.brain.web_research.is_available():
+                            print(f"\n{Fore.CYAN}Searching web...{Style.RESET_ALL}")
+                            original_query = intents['research_query']
+                            optimized_query = self.brain.web_research.optimize_query(original_query)
+                            if optimized_query != original_query:
+                                print(f"{Fore.YELLOW}Optimized search: {optimized_query}{Style.RESET_ALL}")
+                            results = self.brain.web_research.search(optimized_query)
+                            if results:
+                                self.brain.web_research.print_results_to_user(results, original_query)
+                                print(f"{Fore.GREEN}Analyzing {len(results)} results...{Style.RESET_ALL}\n")
+                                formatted = self.brain.web_research.format_results_for_ai(results, original_query)
+                                enhanced_input = f"{formatted}"
+                                self.brain.think_and_act(enhanced_input, force_execute=force, safe_mode=safe_mode, show_only=show_only)
+                            else:
+                                print(f"{Fore.YELLOW}No results found, answering from knowledge...{Style.RESET_ALL}")
+                                self.brain.think_and_act(parsed_input, force_execute=force, safe_mode=safe_mode, show_only=show_only)
+                        else:
+                            print(f"{Fore.YELLOW}Web research not available. Install with 'research on'{Style.RESET_ALL}")
+                            self.brain.think_and_act(parsed_input, force_execute=force, safe_mode=safe_mode, show_only=show_only)
+                    
+                    elif intents['needs_gui'] and not self.brain.offline_mode:
+                        if not self.brain.gui_enabled:
+                            print(f"\n{Fore.YELLOW}GUI automation is disabled. Enable with 'gui on'{Style.RESET_ALL}")
+                            self.brain.think_and_act(parsed_input, force_execute=force, safe_mode=safe_mode, show_only=show_only)
+                        else:
+                            print(f"\n{Fore.CYAN}Generating hybrid plan (Terminal + GUI)...{Style.RESET_ALL}")
+                            plan = self.brain.generate_hybrid_plan(parsed_input)
+                            if plan and plan.get('needs_gui'):
+                                print(f"{Fore.GREEN}Plan generated with {len(plan.get('steps', []))} steps{Style.RESET_ALL}")
+                                if not show_only:
+                                    if force or input(f"{Fore.YELLOW}Execute hybrid plan? (Y/N): {Style.RESET_ALL}").upper() == 'Y':
+                                        self.brain.execute_hybrid_plan(plan, safe_mode=safe_mode)
+                                    else:
+                                        print(f"{Fore.YELLOW}Plan cancelled{Style.RESET_ALL}")
+                                else:
+                                    print(f"\n{Fore.CYAN}Hybrid Plan Preview:{Style.RESET_ALL}")
+                                    for step in plan.get('steps', []):
+                                        print(f"  [{step.get('step')}] {step.get('type').upper()}: {step.get('description', step.get('action'))}")
+                            else:
+                                self.brain.think_and_act(parsed_input, force_execute=force, safe_mode=safe_mode, show_only=show_only)
+                    
+                    else:
+                        print(f"\n{Fore.YELLOW}Processing...{Style.RESET_ALL}")
+                        self.brain.think_and_act(parsed_input, force_execute=force, safe_mode=safe_mode, show_only=show_only)
+                    
+                    if self.brain.p2p_sharing.is_connected:
+                        self.brain.p2p_sharing.add_terminal_log(f"Request: {parsed_input[:100]}")
                     
                     duration = time.time() - start
-                    print(f"\n{Fore.WHITE}⏱️ {duration:.2f} seconds{Style.RESET_ALL}")
+                    print(f"\n{Fore.WHITE}{duration:.2f}s{Style.RESET_ALL}")
                     
                 except KeyboardInterrupt:
-                    print(f"\n{Fore.YELLOW}⚠️ Type 'exit' to quit{Style.RESET_ALL}")
+                    print(f"\n{Fore.YELLOW}Type 'exit' to quit{Style.RESET_ALL}")
                 except Exception as e:
-                    print(f"\n{Fore.RED}❌ Error: {str(e)}{Style.RESET_ALL}")
+                    print(f"\n{Fore.RED}Error: {str(e)}{Style.RESET_ALL}")
                     
         except Exception as e:
-            print(f"{Fore.RED}❌ Shell error: {str(e)}{Style.RESET_ALL}")
+            print(f"{Fore.RED}Shell error: {str(e)}{Style.RESET_ALL}")
 
 
 def main():
