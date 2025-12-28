@@ -1,5 +1,4 @@
 import os
-import sys
 import subprocess
 import time
 import datetime
@@ -7,9 +6,9 @@ import json
 import platform
 import threading
 import socket
-import hashlib
 import base64
 import re
+import keyboard
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -32,25 +31,18 @@ except ImportError:
     BS4_AVAILABLE = False
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageDraw, ImageFont
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
 
 try:
     import pyautogui
-    import keyboard
     PYAUTOGUI_AVAILABLE = True
     pyautogui.PAUSE = 0.1
     pyautogui.FAILSAFE = True
 except ImportError:
     PYAUTOGUI_AVAILABLE = False
-
-try:
-    import websocket
-    WEBSOCKET_AVAILABLE = True
-except ImportError:
-    WEBSOCKET_AVAILABLE = False
 
 try:
     from ddgs import DDGS
@@ -128,7 +120,13 @@ TERMINAL_CAPABILITIES = {
 
 SUPPORTED_IMAGE_FORMATS = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp']
 
-P2P_RELAY_URL = "wss://free-relay.glitch.me"
+# Shell paths (used in _detect_shells and run_command)
+GIT_BASH_PATHS = [
+    r'C:\Program Files\Git\bin\bash.exe',
+    r'C:\Program Files (x86)\Git\bin\bash.exe',
+    os.path.expanduser(r'~\AppData\Local\Programs\Git\bin\bash.exe')
+]
+CYGWIN_PATHS = [r'C:\cygwin64\bin\bash.exe', r'C:\cygwin\bin\bash.exe']
 
 
 class TaskContext:
@@ -499,51 +497,130 @@ class GUIAutomationBridge:
             time.sleep(wait_time)
             
             self.action_history.append(action)
+        
+            if len(self.action_history) > 100:
+                self.action_history = self.action_history[-100:]
             return {"success": True, "action": action_type}
             
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def _draw_grid(self, image, grid_size=10):
+        draw = ImageDraw.Draw(image)
+        width, height = image.size
+        color = (255, 0, 0, 128)
+        
+        for i in range(1, grid_size):
+            y = int(height * i / grid_size)
+            draw.line([(0, y), (width, y)], fill=color, width=1)
+            
+        for i in range(1, grid_size):
+            x = int(width * i / grid_size)
+            draw.line([(x, 0), (x, height)], fill=color, width=1)
+            
+        for i in range(grid_size):
+            for j in range(grid_size):
+                label = f"{chr(65+i)}{j+1}"
+                x = int((width * i / grid_size) + 10)
+                y = int((height * j / grid_size) + 10)
+                try:
+                    font = ImageFont.load_default()
+                    draw.text((x, y), label, fill=color, font=font)
+                except:
+                    pass
+            
+        return image
     
     def find_and_click(self, target_description: str) -> Dict:
-        """Use AI to find element on screen and click it"""
         self._init_model()
         
         if not self.is_available_flag:
             return {"success": False, "error": "GUI automation not available"}
+
+        if not PIL_AVAILABLE:
+            return {"success": False, "error": "PIL library is required for this feature"}
+        
+        time.sleep(2)
         
         screen_b64 = self.capture_screen()
         if not screen_b64:
             return {"success": False, "error": "Failed to capture screen"}
-        
-        prompt = f"""You are looking at a screenshot. Find the element: "{target_description}"
-
-Return ONLY a JSON object with the normalized coordinates (0-1000 scale):
-{{"x": <0-1000>, "y": <0-1000>, "found": true/false, "confidence": <0-100>}}
-
-If the element is not visible, return {{"found": false}}"""
-        
+            
         try:
+            screenshot = Image.open(BytesIO(base64.b64decode(screen_b64)))
+            width, height = screenshot.size
+            
+            grid_image = screenshot.copy()
+            self._draw_grid(grid_image)
+            
+            buffered = BytesIO()
+            grid_image.save(buffered, format="PNG")
+            grid_b64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+            
+            try:
+                logical_width, logical_height = pyautogui.size()
+                scale_x = logical_width / width
+                scale_y = logical_height / height
+            except:
+                logical_width, logical_height = width, height
+                scale_x, scale_y = 1.0, 1.0
+            
+            prompt = f"""TASK: find_element_center
+Target: "{target_description}"
+
+INSTRUCTIONS:
+1. Analyze the red grid overlay (10x10) on the image.
+2. Return NORMALIZED coordinates (0-1000 range) for the center of the target.
+   - (0,0) = Top-Left, (1000,1000) = Bottom-Right
+3. Output JSON ONLY:
+   {{
+       "found": true,
+       "x": <0-1000 int>,
+       "y": <0-1000 int>,
+       "confidence": <0-100>
+   }}
+   or {{ "found": false }}"""
+            
             response = self.model.generate_content([
                 prompt,
-                {"mime_type": "image/png", "data": screen_b64}
+                {"mime_type": "image/png", "data": grid_b64}
             ])
             
-            result_text = response.text
+            result_text = response.text.strip()
+            if "```json" in result_text:
+                result_text = result_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in result_text:
+                result_text = result_text.split("```")[0].strip()
+                
             start = result_text.find('{')
             end = result_text.rfind('}') + 1
+            
             if start >= 0 and end > start:
                 result = json.loads(result_text[start:end])
                 
-                if result.get('found', False):
-                    real_x = int((result['x'] / 1000.0) * self.screen_width)
-                    real_y = int((result['y'] / 1000.0) * self.screen_height)
+                if result.get('found', False) and result.get('confidence', 0) >= 60:
+                    norm_x = result.get('x', 500)
+                    norm_y = result.get('y', 500)
                     
-                    return self.execute_action({
-                        'action': 'click',
-                        'x': real_x,
-                        'y': real_y,
-                        'wait_after': 1.5
-                    })
+                    actual_x = int((norm_x / 1000.0) * width)
+                    actual_y = int((norm_y / 1000.0) * height)
+                    
+                    click_x = int(actual_x * scale_x)
+                    click_y = int(actual_y * scale_y)
+                    
+                    if 0 <= click_x <= logical_width and 0 <= click_y <= logical_height:
+                        print(f"{Fore.CYAN}GUI: Click at ({click_x}, {click_y}) confidence: {result.get('confidence')}%{Style.RESET_ALL}")
+                        
+                        return self.execute_action({
+                            'action': 'click',
+                            'x': click_x,
+                            'y': click_y,
+                            'wait_after': 1.5
+                        })
+                    else:
+                        return {"success": False, "error": f"Coordinates out of bounds: ({click_x}, {click_y})"}
+                elif result.get('found', False) and result.get('confidence', 0) < 60:
+                    return {"success": False, "error": f"Low confidence ({result.get('confidence')}%) for: {target_description}"}
                 else:
                     return {"success": False, "error": f"Element not found: {target_description}"}
             
@@ -849,8 +926,12 @@ class P2PTerminalSharing:
             print(f"  [{ts}] {log['log'][:80]}")
     
     def end_session(self):
-        """End session"""
+        """End session with proper cleanup"""
         self.running = False
+        # Memory leak fix: wait for thread to finish
+        if self.receive_thread and self.receive_thread.is_alive():
+            self.receive_thread.join(timeout=2.0)
+        self.receive_thread = None
         if self.client_socket:
             try:
                 self.client_socket.close()
@@ -1437,7 +1518,7 @@ class AIBrain:
         return self._p2p_sharing
     
     def detect_intent(self, user_message: str) -> Dict:
-        """Detect user intent using 100% AI-based NLP"""
+        """Detect user intent - optimized: skips AI if features disabled"""
         intents = {
             'needs_research': False,
             'needs_image_analysis': False,
@@ -1447,6 +1528,7 @@ class AIBrain:
             'research_query': None
         }
         
+
         for fmt in SUPPORTED_IMAGE_FORMATS:
             pattern = rf'[\w/\\:.-]+\.{fmt}\b'
             match = re.search(pattern, user_message, re.IGNORECASE)
@@ -1455,38 +1537,20 @@ class AIBrain:
                 intents['image_path'] = match.group(0)
                 break
         
+
         if self.offline_mode or not self.model:
             return intents
         
+
+        if not self.gui_enabled and not self.research_enabled:
+            return intents
+        
         try:
-            intent_prompt = f"""You are an intent classifier. Analyze this user request and determine what capabilities are needed.
-
-User request: "{user_message}"
-
-Return ONLY valid JSON:
-{{
-    "needs_research": true/false,
-    "needs_gui": true/false,
-    "needs_terminal": true/false,
-    "needs_hybrid": true/false
-}}
-
-RULES:
-- needs_research = true if user asks about current/latest info, versions, news, "what is X", "how to"
-- needs_terminal = true if task can be done with command line (file ops, running programs, system commands)
-- needs_gui = true if task requires clicking UI elements, buttons, forms
-- needs_hybrid = true if task needs BOTH terminal AND GUI (e.g., "open chrome and click search")
-
-Examples:
-- "list files on desktop" → terminal only
-- "open chrome and go to youtube" → terminal (start chrome youtube.com)
-- "search google and click first result" → hybrid
-- "click the red button" → gui
-- "what is the latest python version" → research
-- "open notepad and type hello world" → hybrid
-- "run ipconfig" → terminal
-- "download X and install it" → hybrid (terminal download, gui install wizard)"""
-
+            # Simplified prompt based on enabled features
+            intent_prompt = f"""Analyze: "{user_message}"
+Return JSON: {{"needs_research": bool, "needs_gui": bool, "needs_hybrid": bool}}
+Rules: needs_research=user asks current info/versions; needs_gui=clicking UI; needs_hybrid=both terminal+GUI"""
+            
             response = self.model.generate_content(intent_prompt)
             text = response.text
             
@@ -1494,16 +1558,17 @@ Examples:
             end = text.rfind('}') + 1
             if start >= 0 and end > start:
                 result = json.loads(text[start:end])
-                intents['needs_research'] = result.get('needs_research', False)
-                intents['needs_gui'] = result.get('needs_gui', False)
-                intents['needs_hybrid'] = result.get('needs_hybrid', False)
-                
-                if intents['needs_hybrid']:
-                    intents['needs_gui'] = True
-                
-                if intents['needs_research']:
-                    intents['research_query'] = user_message
-        except Exception as e:
+                # Only set if feature is enabled
+                if self.research_enabled:
+                    intents['needs_research'] = result.get('needs_research', False)
+                    if intents['needs_research']:
+                        intents['research_query'] = user_message
+                if self.gui_enabled:
+                    intents['needs_gui'] = result.get('needs_gui', False)
+                    intents['needs_hybrid'] = result.get('needs_hybrid', False)
+                    if intents['needs_hybrid']:
+                        intents['needs_gui'] = True
+        except Exception:
             pass
         
         return intents
@@ -1789,13 +1854,8 @@ Only include GUI steps if clicking/typing in a GUI application is truly needed."
             if subprocess.run(['where', 'pwsh'], capture_output=True, shell=True).returncode == 0:
                 shells.append('pwsh')
             
-            # Check Git Bash
-            git_bash_paths = [
-                r'C:\Program Files\Git\bin\bash.exe',
-                r'C:\Program Files (x86)\Git\bin\bash.exe',
-                os.path.expanduser(r'~\AppData\Local\Programs\Git\bin\bash.exe')
-            ]
-            for path in git_bash_paths:
+            # Check Git Bash - use global constant
+            for path in GIT_BASH_PATHS:
                 if os.path.exists(path):
                     shells.append('git-bash')
                     break
@@ -1804,8 +1864,8 @@ Only include GUI steps if clicking/typing in a GUI application is truly needed."
             if subprocess.run(['where', 'wsl'], capture_output=True, shell=True).returncode == 0:
                 shells.append('wsl')
             
-            # Check Cygwin
-            if os.path.exists(r'C:\cygwin64\bin\bash.exe') or os.path.exists(r'C:\cygwin\bin\bash.exe'):
+            # Check Cygwin - use global constant
+            if any(os.path.exists(p) for p in CYGWIN_PATHS):
                 shells.append('cygwin')
         
         else:  # Linux/Mac
@@ -1885,7 +1945,6 @@ REMEMBER: System has {len(self.context['available_shells'])} different shells: {
         
         
         if self.offline_mode:
-            shells = ', '.join(self.context['available_shells'])
             
             if self.thinking_enabled:
                 return f"""You are a command line tool.
@@ -1958,9 +2017,7 @@ Before creating your JSON response, you MUST perform detailed analysis inside <t
         recent_history = self.memory.get_recent_history()
         history_text = self._format_history(recent_history)
         
-        offline_notice = ""
-        if self.offline_mode:
-            offline_notice = f"\n{Fore.MAGENTA}🔌 OFFLINE MODE - Using local AI model{Style.RESET_ALL}\n"
+
         
         return f"""You are ZAI, a COMPLETELY FREE artificial intelligence assistant.
 
@@ -2316,7 +2373,7 @@ Only write the response text, nothing else. No JSON, no explanation, just the re
             response = self.model.generate_content(prompt)
             return response.text.strip()
             
-        except Exception as e:
+        except Exception:
             return outputs[0] if outputs else "Operation completed!"
 
 
@@ -2377,130 +2434,58 @@ class AITools:
             return {"success": False, "error": f"File error: {str(e)}"}
     
     def run_command(self, details):
-        """Execute system command"""
+        """Execute system command - optimized"""
+        command = details.get('content', '')
+        shell_type = details.get('shell', 'cmd').lower()
+        encoding = details.get('encoding', 'utf-8')
+        
+        if not command:
+            return {"success": False, "error": "Command not specified"}
+        
+        def _run(cmd_args, use_shell=False, executable=None):
+            """Helper to run subprocess with common params"""
+            return subprocess.run(
+                cmd_args, shell=use_shell, executable=executable,
+                capture_output=True, text=True, timeout=600,
+                encoding=encoding, errors='replace'
+            )
+        
+        def _find_path(paths):
+            """Find first existing path from list"""
+            for p in paths:
+                if os.path.exists(p):
+                    return p
+            return None
+        
         try:
-            command = details.get('content', '')
-            shell_type = details.get('shell', 'cmd').lower()
-            encoding = details.get('encoding', 'utf-8')
+            # Direct command mappings
+            shell_cmds = {
+                'powershell': ['powershell', '-NoProfile', '-Command', command],
+                'pwsh': ['pwsh', '-NoProfile', '-Command', command],
+                'cmd': ['cmd', '/c', command],
+                'wsl': ['wsl', 'bash', '-c', command],
+            }
             
-            if not command:
-                return {"success": False, "error": "Command not specified"}
+            if shell_type in shell_cmds:
+                result = _run(shell_cmds[shell_type])
             
-            # PowerShell variants
-            if shell_type == 'powershell':
-                full_command = ['powershell', '-NoProfile', '-Command', command]
-                result = subprocess.run(
-                    full_command,
-                    capture_output=True,
-                    text=True,
-                    timeout=600,
-                    encoding=encoding,
-                    errors='replace'
-                )
-            elif shell_type == 'pwsh':
-                full_command = ['pwsh', '-NoProfile', '-Command', command]
-                result = subprocess.run(
-                    full_command,
-                    capture_output=True,
-                    text=True,
-                    timeout=600,
-                    encoding=encoding,
-                    errors='replace'
-                )
-            
-            # CMD
-            elif shell_type == 'cmd':
-                full_command = ['cmd', '/c', command]
-                result = subprocess.run(
-                    full_command,
-                    capture_output=True,
-                    text=True,
-                    timeout=600,
-                    encoding=encoding,
-                    errors='replace'
-                )
-            
-            # Git Bash
             elif shell_type == 'git-bash':
-                git_bash_paths = [
-                    r'C:\Program Files\Git\bin\bash.exe',
-                    r'C:\Program Files (x86)\Git\bin\bash.exe',
-                    os.path.expanduser(r'~\AppData\Local\Programs\Git\bin\bash.exe')
-                ]
-                git_bash = None
-                for path in git_bash_paths:
-                    if os.path.exists(path):
-                        git_bash = path
-                        break
-                
-                if git_bash:
-                    result = subprocess.run(
-                        [git_bash, '-c', command],
-                        capture_output=True,
-                        text=True,
-                        timeout=600,
-                        encoding=encoding,
-                        errors='replace'
-                    )
-                else:
+                bash = _find_path(GIT_BASH_PATHS)
+                if not bash:
                     return {"success": False, "error": "Git Bash not found"}
+                result = _run([bash, '-c', command])
             
-            # WSL
-            elif shell_type == 'wsl':
-                result = subprocess.run(
-                    ['wsl', 'bash', '-c', command],
-                    capture_output=True,
-                    text=True,
-                    timeout=600,
-                    encoding=encoding,
-                    errors='replace'
-                )
-            
-            # Cygwin
             elif shell_type == 'cygwin':
-                cygwin_paths = [r'C:\cygwin64\bin\bash.exe', r'C:\cygwin\bin\bash.exe']
-                cygwin_bash = None
-                for path in cygwin_paths:
-                    if os.path.exists(path):
-                        cygwin_bash = path
-                        break
-                
-                if cygwin_bash:
-                    result = subprocess.run(
-                        [cygwin_bash, '-c', command],
-                        capture_output=True,
-                        text=True,
-                        timeout=600,
-                        encoding=encoding,
-                        errors='replace'
-                    )
-                else:
+                bash = _find_path(CYGWIN_PATHS)
+                if not bash:
                     return {"success": False, "error": "Cygwin not found"}
+                result = _run([bash, '-c', command])
             
-            # Unix shells (bash, sh, zsh, fish, ksh, tcsh, dash)
             elif shell_type in ['bash', 'sh', 'zsh', 'fish', 'ksh', 'tcsh', 'dash']:
-                result = subprocess.run(
-                    command,
-                    shell=True,
-                    executable=f'/bin/{shell_type}',
-                    capture_output=True,
-                    text=True,
-                    timeout=600,
-                    encoding=encoding,
-                    errors='replace'
-                )
+                result = _run(command, use_shell=True, executable=f'/bin/{shell_type}')
             
-            # Default fallback
             else:
-                result = subprocess.run(
-                    command,
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=600,
-                    encoding=encoding,
-                    errors='replace'
-                )
+                result = _run(command, use_shell=True)
             
             return {
                 "success": result.returncode == 0,
@@ -2511,9 +2496,9 @@ class AITools:
             }
             
         except subprocess.TimeoutExpired:
-            return {"success": False, "error": "Command timed out (600 seconds)"}
+            return {"success": False, "error": "Command timed out (600s)"}
         except Exception as e:
-            return {"success": False, "error": f"Command error: {str(e)}"}
+            return {"success": False, "error": f"Command error: {e}"}
     
     def create_code(self, details):
         """Create code"""
@@ -2639,7 +2624,7 @@ class ZAIShell:
         
         print(f"""
 {Fore.CYAN}╔════════════════════════════════════════════════════════════╗
-║            🚀 ZAI v7.0 - Advanced AI Shell                 ║
+║            🚀 ZAI v7.0.1 - Advanced AI Shell                 ║
 ║     Terminal • GUI • Research • Image • P2P Sharing        ║
 ╚════════════════════════════════════════════════════════════╝{Style.RESET_ALL}
 
@@ -2957,13 +2942,11 @@ class ZAIShell:
                         print(f"\n{Fore.CYAN}Analyzing image: {intents['image_path']}{Style.RESET_ALL}")
                         analysis = self.brain.image_analyzer.analyze_image(intents['image_path'])
                         if analysis.get('success'):
-                            print(f"\n{Fore.GREEN}Image Analysis Result:{Style.RESET_ALL}")
-                            print(analysis.get('analysis', 'No analysis available'))
-                            enhanced_input = f"{parsed_input}\n\nImage Analysis Context:\n{analysis.get('analysis', '')}"
-                            self.brain.think_and_act(enhanced_input, force_execute=force, safe_mode=safe_mode, show_only=show_only)
+                            print(f"\n{Fore.GREEN}🤖 ZAI: {analysis.get('analysis', 'No analysis available')}{Style.RESET_ALL}")
+                            self.memory.add_conversation("user", parsed_input)
+                            self.memory.add_conversation("assistant", analysis.get('analysis', ''))
                         else:
                             print(f"\n{Fore.RED}Image analysis failed: {analysis.get('error')}{Style.RESET_ALL}")
-                            self.brain.think_and_act(parsed_input, force_execute=force, safe_mode=safe_mode, show_only=show_only)
                     
                     elif intents['needs_research'] and not self.brain.offline_mode:
                         if not self.brain.research_enabled:
