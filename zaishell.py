@@ -57,7 +57,16 @@ except ImportError:
 init(autoreset=True)
 
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', "Or Enter Your API Key Here")
-genai.configure(api_key=GEMINI_API_KEY)
+GEMINI_BASE_URL = os.getenv('GEMINI_BASE_URL', '')  # Custom API endpoint (e.g., http://127.0.0.1:8045)
+
+if GEMINI_BASE_URL:
+    genai.configure(
+        api_key=GEMINI_API_KEY,
+        transport="rest",
+        client_options={"api_endpoint": GEMINI_BASE_URL}
+    )
+else:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 # Memory file path
 MEMORY_FILE = ".zaishell_memory.json"
@@ -340,7 +349,7 @@ class ImageAnalyzer:
     def _init_model(self):
         """Lazy initialize the model"""
         if self.model is None:
-            self.model = genai.GenerativeModel('gemini-2.5-flash')
+            self.model = genai.GenerativeModel('gemini-3-flash')
     
     def is_supported_format(self, file_path: str) -> bool:
         """Check if file format is supported"""
@@ -429,7 +438,7 @@ class GUIAutomationBridge:
         """Initialize model with temperature 0 for deterministic GUI actions"""
         if self.model is None:
             self.model = genai.GenerativeModel(
-                'gemini-2.5-flash',
+                'gemini-3-flash',
                 generation_config={'temperature': 0.0, 'top_k': 1}
             )
     
@@ -1392,13 +1401,13 @@ class ModeManager:
     
     MODES = {
         "normal": {
-            "model": "gemini-2.5-flash",
+            "model": "gemini-3-flash",
             "temperature": 0.7,
             "description": "Standard mode - Balanced performance",
             "instruction_modifier": ""
         },
         "eco": {
-            "model": "gemini-2.5-flash-lite",
+            "model": "gemini-3-flash",
             "temperature": 0.3,
             "max_output_tokens": 2048,
             "top_p": 0.8,
@@ -1415,7 +1424,7 @@ class ModeManager:
 """
         },
         "lightning": {
-            "model": "gemini-2.5-flash-lite",
+            "model": "gemini-3-flash",
             "temperature": 0.0,
             "max_output_tokens": 2048,
             "top_p": 0.9,
