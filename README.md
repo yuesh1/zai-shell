@@ -527,7 +527,7 @@ Host: share approve
 
 ## 🗺️ Roadmap
 
-### Completed (v7.0 - December 27, 2024)
+### Completed (v7.0 - December 27, 2025)
 
 - ✅ **Hybrid GUI & CLI**: Full terminal + GUI automation
 - ✅ **Visual Error Analysis**: Screenshot-based debugging with Gemini Vision
