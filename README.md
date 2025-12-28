@@ -159,6 +159,10 @@ Control desktop applications with AI:
 - **Hybrid workflows**: Terminal commands + GUI actions
 - **Error recovery** with visual feedback
 
+![Opera GX Installation Demo](assets/guiuse.gif)
+**Hybrid workflow:** Terminal + GUI automation installing Opera GX  
+⭐ GUI steps simulate real user behavior, including natural wait times
+
 **Example:**
 ```bash
 You: "Open Chrome, search for Python docs, click first result"
