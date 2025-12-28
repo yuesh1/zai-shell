@@ -185,13 +185,11 @@ You: "python son sürümünü araştır"
 
 Optimized search: "python latest version"
 Found 5 results:
-1. Python 3.13.1 released - python.org
-2. What's new in Python 3.13 - docs.python.org
+1. Python 3.14.2 released - python.org
+2. What's new in Python 3.14 - docs.python.org
 ...
 
-AI: Based on search results, Python 3.13.1 is the latest 
-stable release as of December 2024, featuring improved 
-performance and new syntax features.
+AI: Based on search results, Python 3.14.2 is the latest version Python
 ```
 
 ### 📸 Image Analysis (NEW in v7.0)
